@@ -46,16 +46,6 @@
       "path": "/assets/models/TinRock.glb"
     },
     {
-      "id": "tree",
-      "name": "Tree",
-      "path": "/assets/models/tree.glb"
-    },
-    {
-      "id": "tree2",
-      "name": "Tree2",
-      "path": "/assets/models/tree2.glb"
-    },
-    {
       "id": "well",
       "name": "Well",
       "path": "/assets/models/well.glb"
@@ -63,152 +53,42 @@
     {
       "id": "dark stone arrowslit",
       "name": "Dark Stone Arrowslit",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone arrowslit.glb"
+      "path": "/assets/Modular assets/new dark modular/dark stone arrowslit.glb"
     },
     {
-      "id": "dark stone connecter",
-      "name": "Dark Stone Connecter",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone connecter.glb"
+      "id": "dark stone door1",
+      "name": "Dark Stone Door1",
+      "path": "/assets/Modular assets/new dark modular/dark stone door1.glb"
     },
     {
-      "id": "dark stone defense corner",
-      "name": "Dark Stone Defense Corner",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone defense corner.glb"
-    },
-    {
-      "id": "dark stone fireplace",
-      "name": "Dark Stone Fireplace",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone fireplace.glb"
-    },
-    {
-      "id": "dark stone fireplace2",
-      "name": "Dark Stone Fireplace2",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone fireplace2.glb"
-    },
-    {
-      "id": "dark stone fireplace3",
-      "name": "Dark Stone Fireplace3",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone fireplace3.glb"
-    },
-    {
-      "id": "dark stone gate",
-      "name": "Dark Stone Gate",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone gate.glb"
-    },
-    {
-      "id": "dark stone halfwall",
-      "name": "Dark Stone Halfwall",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone halfwall.glb"
-    },
-    {
-      "id": "dark stone pillar curved small",
-      "name": "Dark Stone Pillar Curved Small",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone pillar curved small.glb"
-    },
-    {
-      "id": "dark stone pillar curved",
-      "name": "Dark Stone Pillar Curved",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone pillar curved.glb"
-    },
-    {
-      "id": "dark stone pillar nice",
-      "name": "Dark Stone Pillar Nice",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone pillar nice.glb"
-    },
-    {
-      "id": "dark stone pillar tiny",
-      "name": "Dark Stone Pillar Tiny",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone pillar tiny.glb"
-    },
-    {
-      "id": "dark stone pillar",
-      "name": "Dark Stone Pillar",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone pillar.glb"
-    },
-    {
-      "id": "dark stone roof decorations",
-      "name": "Dark Stone Roof Decorations",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone roof decorations.glb"
-    },
-    {
-      "id": "dark stone roof decorations2",
-      "name": "Dark Stone Roof Decorations2",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone roof decorations2.glb"
-    },
-    {
-      "id": "dark stone roof",
-      "name": "Dark Stone Roof",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone roof.glb"
-    },
-    {
-      "id": "dark stone shelf",
-      "name": "Dark Stone Shelf",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone shelf.glb"
-    },
-    {
-      "id": "dark stone shelf2",
-      "name": "Dark Stone Shelf2",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone shelf2.glb"
-    },
-    {
-      "id": "dark stone small wall",
-      "name": "Dark Stone Small Wall",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone small wall.glb"
-    },
-    {
-      "id": "dark stone stairs door",
-      "name": "Dark Stone Stairs Door",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone stairs door.glb"
-    },
-    {
-      "id": "dark stone stairs small",
-      "name": "Dark Stone Stairs Small",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone stairs small.glb"
-    },
-    {
-      "id": "dark stone stairs",
-      "name": "Dark Stone Stairs",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone stairs.glb"
-    },
-    {
-      "id": "dark stone wall curved",
-      "name": "Dark Stone Wall Curved",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall curved.glb"
-    },
-    {
-      "id": "dark stone wall door",
-      "name": "Dark Stone Wall Door",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall door.glb"
-    },
-    {
-      "id": "dark stone wall door2",
-      "name": "Dark Stone Wall Door2",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall door2.glb"
+      "id": "dark stone door2",
+      "name": "Dark Stone Door2",
+      "path": "/assets/Modular assets/new dark modular/dark stone door2.glb"
     },
     {
       "id": "dark stone door3",
       "name": "Dark Stone Door3",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone door3.glb"
+      "path": "/assets/Modular assets/new dark modular/dark stone door3.glb"
     },
     {
-      "id": "dark stone wall window",
-      "name": "Dark Stone Wall Window",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall window.glb"
-    },
-    {
-      "id": "dark stone wall window2",
-      "name": "Dark Stone Wall Window2",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall window2.glb"
-    },
-    {
-      "id": "dark stone wall window3",
-      "name": "Dark Stone Wall Window3",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall window3.glb"
+      "id": "dark stone small wall",
+      "name": "Dark Stone Small Wall",
+      "path": "/assets/Modular assets/new dark modular/dark stone small wall.glb"
     },
     {
       "id": "dark stone wall",
       "name": "Dark Stone Wall",
-      "path": "/assets/Modular assets/Dark stone modular/dark stone wall.glb"
+      "path": "/assets/Modular assets/new dark modular/dark stone wall.glb"
+    },
+    {
+      "id": "dark stone window",
+      "name": "Dark Stone Window",
+      "path": "/assets/Modular assets/new dark modular/dark stone window.glb"
+    },
+    {
+      "id": "dark stone window2",
+      "name": "Dark Stone Window2",
+      "path": "/assets/Modular assets/new dark modular/dark stone window2.glb"
     },
     {
       "id": "small wall",
@@ -589,6 +469,51 @@
       "id": "wood roofing",
       "name": "Wood Roofing",
       "path": "/assets/Modular assets/Wood modular /wood roofing.glb"
+    },
+    {
+      "id": "maple tree",
+      "name": "Maple Tree",
+      "path": "/assets/models/maple tree.glb"
+    },
+    {
+      "id": "sTree 1",
+      "name": "sTree 1",
+      "path": "/assets/models/sTree 1.glb"
+    },
+    {
+      "id": "sTree 2",
+      "name": "sTree 2",
+      "path": "/assets/models/sTree 2.glb"
+    },
+    {
+      "id": "stree 3",
+      "name": "sTree 3",
+      "path": "/assets/models/stree 3.glb"
+    },
+    {
+      "id": "stree autumn",
+      "name": "sTree Autumn",
+      "path": "/assets/models/stree autumn.glb"
+    },
+    {
+      "id": "stree magic",
+      "name": "sTree Magic",
+      "path": "/assets/models/stree magic.glb"
+    },
+    {
+      "id": "new stone arrowslit",
+      "name": "New Stone Arrowslit",
+      "path": "/assets/Modular assets/new stone modular/stone arrowslit.glb"
+    },
+    {
+      "id": "new stone small wall",
+      "name": "New Stone Small Wall",
+      "path": "/assets/Modular assets/new stone modular/stone small wall.glb"
+    },
+    {
+      "id": "new stone window",
+      "name": "New Stone Window",
+      "path": "/assets/Modular assets/new stone modular/stone window.glb"
     }
   ]
 }

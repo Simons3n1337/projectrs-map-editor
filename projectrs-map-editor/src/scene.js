@@ -3812,9 +3812,20 @@ if (key === 'e') {
   buildGroundSwatches()
   refreshLayersPanel()
   updateToolUI()
-  initAssets()
-  initTextures()
   pushUndoState()
+
+  async function initDefaultSave() {
+    try {
+      const res = await fetch('/worldsave/main.json')
+      if (!res.ok) return
+      const data = await res.json()
+      await loadSaveData(data)
+    } catch (e) {
+      console.warn('Could not load default save:', e)
+    }
+  }
+
+  Promise.all([initAssets(), initTextures()]).then(() => initDefaultSave())
 
   function animate() {
     requestAnimationFrame(animate)
