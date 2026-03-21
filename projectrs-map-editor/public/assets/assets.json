@@ -491,11 +491,6 @@
       "path": "/assets/models/halfwall45.glb"
     },
     {
-      "id": "roof",
-      "name": "Roof",
-      "path": "/assets/models/roof.glb"
-    },
-    {
       "id": "wood plank",
       "name": "Wood Plank",
       "path": "/assets/models/wood plank.glb"
@@ -504,6 +499,46 @@
       "id": "wood pole",
       "name": "Wood Pole",
       "path": "/assets/models/wood pole.glb"
+    },
+    {
+      "id": "Basic1TileDoor",
+      "name": "Basic 1 Tile Door",
+      "path": "/assets/models/Basic1TileDoor.glb"
+    },
+    {
+      "id": "DeadTreeLam",
+      "name": "Dead Tree",
+      "path": "/assets/models/DeadTreeLam.glb"
+    },
+    {
+      "id": "Fence1",
+      "name": "Fence",
+      "path": "/assets/models/Fence1.glb"
+    },
+    {
+      "id": "TrapdoorOpenFinal",
+      "name": "Trapdoor Open",
+      "path": "/assets/models/TrapdoorOpenFinal.glb"
+    },
+    {
+      "id": "WIPStair1",
+      "name": "Stair",
+      "path": "/assets/models/WIPStair1.glb"
+    },
+    {
+      "id": "flat roof",
+      "name": "Flat Roof",
+      "path": "/assets/models/flat roof.glb"
+    },
+    {
+      "id": "tile roofing",
+      "name": "Tile Roofing",
+      "path": "/assets/models/tile roofing.glb"
+    },
+    {
+      "id": "tile roofing2",
+      "name": "Tile Roofing2",
+      "path": "/assets/models/tile roofing2.glb"
     },
     {
       "id": "wood arrowslit",
@@ -549,6 +584,11 @@
       "id": "wood window2",
       "name": "Wood Window2",
       "path": "/assets/Modular assets/Wood modular /wood window2.glb"
+    },
+    {
+      "id": "wood roofing",
+      "name": "Wood Roofing",
+      "path": "/assets/Modular assets/Wood modular /wood roofing.glb"
     }
   ]
 }

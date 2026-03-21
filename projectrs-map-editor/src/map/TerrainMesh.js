@@ -613,57 +613,65 @@ export function buildTextureOverlays(map, textureRegistry, textureCache) {
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
       const tile = map.getTile(x, z)
-      if (!tile || !tile.textureId) continue
-
-      const textureInfo = textureRegistry.find((t) => t.id === tile.textureId)
-      if (!textureInfo) continue
-
-      const texture = textureCache.get(textureInfo.id)
-      if (!texture) continue
+      if (!tile || (!tile.textureId && !tile.textureIdB)) continue
+      // textureHalfMode with both null means fully erased half-painted tile — skip
 
       const h = map.getTileCornerHeights(x, z)
-      const uv = scaledRotatedUVs(tile.textureRotation, tile.textureScale)
-
       const overlayOffset = 0.008
 
-      const vertices = [
+      const positions = [
         x,     h.tl + overlayOffset, z,
         x + 1, h.tr + overlayOffset, z,
         x,     h.bl + overlayOffset, z + 1,
         x + 1, h.br + overlayOffset, z + 1
       ]
 
-      const uvs = [
-        uv[0][0], uv[0][1],
-        uv[1][0], uv[1][1],
-        uv[2][0], uv[2][1],
-        uv[3][0], uv[3][1]
-      ]
+      const fwd = tile.split === 'forward'
+      const firstIndices  = fwd ? [0, 2, 1]       : [0, 2, 3]
+      const secondIndices = fwd ? [2, 3, 1]       : [0, 3, 1]
+      const fullIndices   = fwd ? [0, 2, 1, 2, 3, 1] : [0, 2, 3, 0, 3, 1]
 
-      const indices = tile.split === 'forward'
-        ? [0, 2, 1, 2, 3, 1]
-        : [0, 2, 3, 0, 3, 1]
+      const makeUVs = (rotation, scale, worldUV) => {
+        if (worldUV) {
+          const s = Math.max(0.1, scale)
+          return [x/s, z/s, (x+1)/s, z/s, x/s, (z+1)/s, (x+1)/s, (z+1)/s]
+        }
+        const uv = scaledRotatedUVs(rotation, scale)
+        return [uv[0][0], uv[0][1], uv[1][0], uv[1][1], uv[2][0], uv[2][1], uv[3][0], uv[3][1]]
+      }
 
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
-      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-      geometry.setIndex(indices)
-      geometry.computeVertexNormals()
+      const addMesh = (textureId, rotation, scale, worldUV, indices) => {
+        const textureInfo = textureRegistry.find((t) => t.id === textureId)
+        if (!textureInfo) return
+        const texture = textureCache.get(textureInfo.id)
+        if (!texture) return
 
-      texture.wrapS = THREE.RepeatWrapping
-      texture.wrapT = THREE.RepeatWrapping
-      texture.colorSpace = THREE.SRGBColorSpace
+        texture.wrapS = THREE.RepeatWrapping
+        texture.wrapT = THREE.RepeatWrapping
+        texture.colorSpace = THREE.SRGBColorSpace
 
-      const material = new THREE.MeshLambertMaterial({
-        map: texture,
-        transparent: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2
-      })
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(makeUVs(rotation, scale, worldUV), 2))
+        geometry.setIndex(indices)
+        geometry.computeVertexNormals()
 
-      const mesh = new THREE.Mesh(geometry, material)
-      group.add(mesh)
+        group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          color: new THREE.Color(0.82, 0.82, 0.82),
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
+        })))
+      }
+
+      if (tile.textureHalfMode) {
+        if (tile.textureId) addMesh(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, firstIndices)
+        if (tile.textureIdB) addMesh(tile.textureIdB, tile.textureRotationB, tile.textureScaleB, false, secondIndices)
+      } else if (tile.textureId) {
+        addMesh(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, fullIndices)
+      }
     }
   }
 
@@ -678,21 +686,44 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     const textureInfo = textureRegistry.find((t) => t.id === plane.textureId)
     if (!textureInfo) continue
 
-    const texture = textureCache.get(textureInfo.id)
-    if (!texture) continue
+    const textureSrc = textureCache.get(textureInfo.id)
+    if (!textureSrc) continue
 
-    texture.wrapS = THREE.ClampToEdgeWrapping
-    texture.wrapT = THREE.ClampToEdgeWrapping
-    texture.colorSpace = THREE.SRGBColorSpace
-    texture.needsUpdate = true
+    const texture = textureSrc.clone()
+    const scale = plane.uvRepeat || 1
 
+    const sx = plane.scale?.x ?? 1
+    const sy = plane.scale?.y ?? 1
     const width = Math.max(0.01, plane.width || 1)
     const height = Math.max(0.01, plane.height || 1)
+    const actualW = width * sx
+    const actualH = height * sy
+
+    const px = plane.position?.x ?? 0
+    const py = plane.position?.y ?? 0
+    const pz = plane.position?.z ?? 0
+    const ry = plane.rotation?.y ?? 0
+
+    // World-space UV: project plane's bottom-left corner onto its own axes
+    // so adjacent planes share UV values at their edges (seamless tiling)
+    const rightX = Math.cos(ry)
+    const rightZ = -Math.sin(ry)
+    const leftEdgeX = px - (actualW / 2) * rightX
+    const leftEdgeZ = pz - (actualW / 2) * rightZ
+    const uWorld = leftEdgeX * rightX + leftEdgeZ * rightZ
+    const vWorld = py - actualH / 2
+
+    texture.wrapS = THREE.RepeatWrapping
+    texture.wrapT = THREE.RepeatWrapping
+    texture.repeat.set(actualW / scale, actualH / scale)
+    texture.offset.set(((uWorld / scale) % 1 + 1) % 1, ((vWorld / scale) % 1 + 1) % 1)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.needsUpdate = true
 
     const geometry = new THREE.PlaneGeometry(width, height)
     const isSelected = map.selectedTexturePlaneId === plane.id
 
-    const material = new THREE.MeshLambertMaterial({
+    const material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
       alphaTest: 0.05,
@@ -700,22 +731,14 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
-      color: isSelected ? 0xeaf4ff : 0xffffff
+      color: isSelected ? new THREE.Color(0xeaf4ff) : new THREE.Color(0.82, 0.82, 0.82)
     })
 
     const mesh = new THREE.Mesh(geometry, material)
     mesh.layers.set(1)
 
-    const px = plane.position?.x ?? 0
-    const py = plane.position?.y ?? 0
-    const pz = plane.position?.z ?? 0
-
     const rx = plane.rotation?.x ?? 0
-    const ry = plane.rotation?.y ?? 0
     const rz = plane.rotation?.z ?? 0
-
-    const sx = plane.scale?.x ?? 1
-    const sy = plane.scale?.y ?? 1
     const sz = plane.scale?.z ?? 1
 
     mesh.position.set(px, py, pz)

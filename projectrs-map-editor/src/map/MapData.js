@@ -19,6 +19,11 @@ export class MapData {
           textureId: null,
           textureRotation: 0,
           textureScale: 1,
+          textureWorldUV: false,
+          textureHalfMode: false,
+          textureIdB: null,
+          textureRotationB: 0,
+          textureScaleB: 1,
           waterPainted: false
         })
       }
@@ -192,13 +197,38 @@ export class MapData {
     tile.waterPainted = false
   }
 
-  paintTextureTile(x, z, textureId, rotation = 0, scale = 1) {
+  paintTextureTile(x, z, textureId, rotation = 0, scale = 1, worldUV = false) {
     const tile = this.getTile(x, z)
     if (!tile) return
 
     tile.textureId = textureId
     tile.textureRotation = rotation
     tile.textureScale = scale
+    tile.textureWorldUV = worldUV
+    tile.textureHalfMode = false
+    tile.textureIdB = null
+    tile.textureRotationB = 0
+    tile.textureScaleB = 1
+  }
+
+  paintTextureTileFirst(x, z, textureId, rotation = 0, scale = 1) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+
+    tile.textureId = textureId
+    tile.textureRotation = rotation
+    tile.textureScale = scale
+    tile.textureHalfMode = true
+  }
+
+  paintTextureTileSecond(x, z, textureId, rotation = 0, scale = 1) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+
+    tile.textureIdB = textureId
+    tile.textureRotationB = rotation
+    tile.textureScaleB = scale
+    tile.textureHalfMode = true
   }
 
   clearTextureTile(x, z) {
@@ -208,6 +238,28 @@ export class MapData {
     tile.textureId = null
     tile.textureRotation = 0
     tile.textureScale = 1
+    tile.textureHalfMode = false
+    tile.textureIdB = null
+    tile.textureRotationB = 0
+    tile.textureScaleB = 1
+  }
+
+  clearTextureTileFirst(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+
+    tile.textureId = null
+    tile.textureRotation = 0
+    tile.textureScale = 1
+  }
+
+  clearTextureTileSecond(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+
+    tile.textureIdB = null
+    tile.textureRotationB = 0
+    tile.textureScaleB = 1
   }
 
   flipTileSplit(x, z) {
@@ -228,7 +280,8 @@ export class MapData {
       rotation: vertical
         ? { x: 0, y: 0, z: 0 }
         : { x: -Math.PI / 2, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 }
+      scale: { x: 1, y: 1, z: 1 },
+      uvRepeat: 1
     }
 
     this.texturePlanes.push(plane)
@@ -295,6 +348,11 @@ export class MapData {
             textureId: src.textureId || null,
             textureRotation: src.textureRotation || 0,
             textureScale: src.textureScale || 1,
+            textureWorldUV: !!src.textureWorldUV,
+            textureHalfMode: !!src.textureHalfMode,
+            textureIdB: src.textureIdB || null,
+            textureRotationB: src.textureRotationB || 0,
+            textureScaleB: src.textureScaleB || 1,
             waterPainted: !!src.waterPainted || src.ground === 'water'
           }
         }

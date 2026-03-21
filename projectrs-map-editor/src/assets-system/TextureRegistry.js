@@ -21,7 +21,8 @@ export async function loadTextureRegistry() {
     .map((tex) => ({
       id: tex.id || tex.file || tex.name,
       name: tex.name || tex.id || tex.file || 'Unnamed Texture',
-      path: tex.path || `/assets/textures/${tex.file}`
+      path: tex.path || `/assets/textures/${tex.file}`,
+      ...(tex.defaultScale != null && { defaultScale: tex.defaultScale })
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
