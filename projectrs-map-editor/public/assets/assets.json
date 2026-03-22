@@ -501,6 +501,11 @@
       "path": "/assets/models/rice.glb"
     },
     {
+      "id": "walltorch",
+      "name": "Wall Torch",
+      "path": "/assets/models/Walltorch.glb"
+    },
+    {
       "id": "onepersonbed1",
       "name": "One Person Bed",
       "path": "/assets/models/OnePersonBed1.glb"

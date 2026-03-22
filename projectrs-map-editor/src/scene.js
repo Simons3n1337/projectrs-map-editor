@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { MapData } from './map/MapData.js'
 import { ToolMode, toolLabel } from './editor/Tools.js'
 import { loadAssetRegistry } from './assets-system/AssetRegistry.js'
-import { loadAssetModel, makeGhostMaterial } from './assets-system/AssetLoader.js'
+import { loadAssetModel, makeGhostMaterial, getAssetAnimations } from './assets-system/AssetLoader.js'
 import { loadTextureRegistry } from './assets-system/TextureRegistry.js'
 import {
   buildTerrainMeshes,
@@ -27,10 +27,13 @@ fillLight.position.set(-10, 6, 10)
 fillLight.layers.set(0)
 scene.add(fillLight)
 
-scene.add(new THREE.AmbientLight(0x8a8a8a, 0.62))
+const ambientMain = new THREE.AmbientLight(0x8a8a8a, 0.62)
+scene.add(ambientMain)
 
-scene.add(new THREE.AmbientLight(0x5c6448, 0.08))
-scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18))
+const ambientGreen = new THREE.AmbientLight(0x5c6448, 0.08)
+scene.add(ambientGreen)
+const hemiLight = new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18)
+scene.add(hemiLight)
 
 function tuneModelLighting(model, assetPath = '') {
   const pathLower = assetPath.toLowerCase()
@@ -134,6 +137,38 @@ function tuneModelLighting(model, assetPath = '') {
   const waterTexture = textureLoader.load('/assets/textures/1.png')
   waterTexture.wrapS = THREE.RepeatWrapping
   waterTexture.wrapT = THREE.RepeatWrapping
+
+  const clock = new THREE.Clock()
+  const mixers = new Map()  // model -> AnimationMixer
+
+  function setupModelAnimations(model, path) {
+    const clips = getAssetAnimations(path)
+    if (!clips.length) return
+    const mixer = new THREE.AnimationMixer(model)
+    for (const clip of clips) mixer.clipAction(clip).play()
+    mixers.set(model, mixer)
+  }
+
+  function disposeMixer(model) {
+    const mixer = mixers.get(model)
+    if (mixer) { mixer.stopAllAction(); mixers.delete(model) }
+  }
+
+  function addPlacedModel(model) {
+    placedGroup.add(model)
+    const asset = assetRegistry.find((a) => a.id === model.userData.assetId)
+    if (asset) setupModelAnimations(model, asset.path)
+  }
+
+  function removePlacedModel(model) {
+    disposeMixer(model)
+    placedGroup.remove(model)
+  }
+
+  function clearPlacedModels() {
+    for (const model of placedGroup.children) disposeMixer(model)
+    placedGroup.clear()
+  }
 
   let map = new MapData(64, 64)
   const placedGroup = new THREE.Group()
@@ -257,6 +292,11 @@ let brushRadius = 3.2
     <span class="top-label">H</span>
     <input id="mapHeightInput" type="number" min="4" value="64" />
     <button id="resizeMapBtn">Resize</button>
+    <span class="top-sep"></span>
+    <span class="top-label">World X</span>
+    <input id="worldOffsetX" type="number" value="0" style="width:60px;" />
+    <span class="top-label">World Z</span>
+    <input id="worldOffsetZ" type="number" value="0" style="width:60px;" />
     <span class="top-sep"></span>
     <button id="helpBtn" title="Keyboard shortcuts">?</button>
   `
@@ -395,6 +435,25 @@ let brushRadius = 3.2
           <button id="applyCustomTileSize">Apply</button>
         </div>
       </div>
+      <div id="triggerRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Trigger</div>
+        <div style="display:flex;gap:5px;align-items:center;margin-bottom:5px;">
+          <select id="triggerType" style="flex:1;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:4px 6px;font-size:12px;">
+            <option value="">— none —</option>
+            <option value="teleport">Teleport</option>
+          </select>
+        </div>
+        <div id="triggerTeleportFields" style="display:none;">
+          <div style="font-size:10px;color:#888;margin-bottom:3px;">Destination chunk file</div>
+          <input id="triggerDestChunk" type="text" placeholder="e.g. dungeon_1" style="width:100%;box-sizing:border-box;margin-bottom:5px;font-size:11px;" />
+          <div style="font-size:10px;color:#888;margin-bottom:3px;">Entry point (X / Y / Z)</div>
+          <div style="display:flex;gap:3px;">
+            <input id="triggerEntryX" type="number" step="0.5" placeholder="X" style="flex:1;min-width:0;" />
+            <input id="triggerEntryY" type="number" step="0.5" placeholder="Y" style="flex:1;min-width:0;" />
+            <input id="triggerEntryZ" type="number" step="0.5" placeholder="Z" style="flex:1;min-width:0;" />
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="ctx-panel" id="ctx-texture" style="display:none">
@@ -502,6 +561,33 @@ let brushRadius = 3.2
     rebuildTerrain()
   })
 
+  // Trigger metadata handlers
+  function saveTriggerFromUI() {
+    if (!selectedPlacedObject) return
+    const type = sidebar.querySelector('#triggerType').value
+    if (!type) {
+      delete selectedPlacedObject.userData.trigger
+      return
+    }
+    selectedPlacedObject.userData.trigger = {
+      type,
+      destChunk: sidebar.querySelector('#triggerDestChunk').value.trim(),
+      entryX: parseFloat(sidebar.querySelector('#triggerEntryX').value) || 0,
+      entryY: parseFloat(sidebar.querySelector('#triggerEntryY').value) || 0,
+      entryZ: parseFloat(sidebar.querySelector('#triggerEntryZ').value) || 0
+    }
+  }
+
+  sidebar.querySelector('#triggerType').addEventListener('change', () => {
+    const isTP = sidebar.querySelector('#triggerType').value === 'teleport'
+    sidebar.querySelector('#triggerTeleportFields').style.display = isTP ? 'block' : 'none'
+    saveTriggerFromUI()
+  })
+
+  for (const id of ['#triggerDestChunk', '#triggerEntryX', '#triggerEntryY', '#triggerEntryZ']) {
+    sidebar.querySelector(id).addEventListener('change', saveTriggerFromUI)
+  }
+
   const replaceBtnEl = sidebar.querySelector('#replaceBtn')
   const replacePanel = sidebar.querySelector('#replacePanel')
   const replaceSearchEl = sidebar.querySelector('#replaceSearch')
@@ -588,7 +674,7 @@ let brushRadius = 3.2
 
  
 
-  const GROUND_TYPES = [
+  const GROUND_TYPES_OVERWORLD = [
     { id: 'grass', label: 'Grass', color: '#3d8a20' },
     { id: 'dirt',  label: 'Dirt',  color: '#7a5030' },
     { id: 'sand',  label: 'Sand',  color: '#c4a245' },
@@ -597,6 +683,16 @@ let brushRadius = 3.2
     { id: 'water', label: 'Mud', color: '#5a3d1a' },
     { id: 'surface-water', label: 'Paddy Water', color: '#7ab8c8' },
   ]
+
+  const GROUND_TYPES_DUNGEON = [
+    { id: 'dungeon-floor', label: 'Stone Floor', color: '#3a2e20' },
+    { id: 'dungeon-rock',  label: 'Rock',        color: '#4a3828' },
+    { id: 'dirt',          label: 'Dirt',         color: '#7a5030' },
+    { id: 'water',         label: 'Mud',          color: '#5a3d1a' },
+    { id: 'surface-water', label: 'Still Water',  color: '#7ab8c8' },
+  ]
+
+  let GROUND_TYPES = GROUND_TYPES_OVERWORLD
 
   function buildGroundSwatches() {
     const container = sidebar.querySelector('#groundSwatches')
@@ -847,6 +943,23 @@ let brushRadius = 3.2
     if (tileSizeRow) {
       tileSizeRow.style.display = (state.tool === ToolMode.SELECT && selectedPlacedObject) ? 'block' : 'none'
     }
+    const triggerRow = sidebar.querySelector('#triggerRow')
+    if (triggerRow) {
+      const showTrigger = state.tool === ToolMode.SELECT && selectedPlacedObject
+      triggerRow.style.display = showTrigger ? 'block' : 'none'
+      if (showTrigger) {
+        const t = selectedPlacedObject.userData.trigger
+        sidebar.querySelector('#triggerType').value = t?.type || ''
+        const isTP = t?.type === 'teleport'
+        sidebar.querySelector('#triggerTeleportFields').style.display = isTP ? 'block' : 'none'
+        if (isTP) {
+          sidebar.querySelector('#triggerDestChunk').value = t.destChunk || ''
+          sidebar.querySelector('#triggerEntryX').value = t.entryX ?? ''
+          sidebar.querySelector('#triggerEntryY').value = t.entryY ?? ''
+          sidebar.querySelector('#triggerEntryZ').value = t.entryZ ?? ''
+        }
+      }
+    }
     const layerAssignRow = sidebar.querySelector('#layerAssignRow')
     if (layerAssignRow) {
       const showAssign = state.tool === ToolMode.SELECT &&
@@ -971,17 +1084,21 @@ let brushRadius = 3.2
   }
 
   function serializePlacedObjects() {
-    return placedGroup.children.map((obj) => ({
-      assetId: obj.userData.assetId || null,
-      layerId: obj.userData.layerId || 'layer_0',
-      position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
-      rotation: { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z },
-      scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z }
-    }))
+    return placedGroup.children.map((obj) => {
+      const out = {
+        assetId: obj.userData.assetId || null,
+        layerId: obj.userData.layerId || 'layer_0',
+        position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+        rotation: { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z },
+        scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z }
+      }
+      if (obj.userData.trigger) out.trigger = { ...obj.userData.trigger }
+      return out
+    })
   }
 
   async function rebuildPlacedObjectsFromData(placedObjectsData) {
-    placedGroup.clear()
+    clearPlacedModels()
 
     for (const placed of placedObjectsData || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
@@ -996,9 +1113,10 @@ let brushRadius = 3.2
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
       model.userData.layerId = placed.layerId || 'layer_0'
+      if (placed.trigger) model.userData.trigger = { ...placed.trigger }
       const layer = layers.find((l) => l.id === model.userData.layerId)
       model.visible = layer ? layer.visible : true
-      placedGroup.add(model)
+      addPlacedModel(model)
     }
   }
 
@@ -1038,6 +1156,8 @@ let brushRadius = 3.2
     if (!data?.map) return
     pushUndoState()
 
+    saveFileHandle = null
+
     map = MapData.fromJSON(data.map)
     selectedPlacedObject = null
     selectedPlacedObjects = []
@@ -1064,6 +1184,9 @@ let brushRadius = 3.2
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
+    worldOffsetX.value = map.worldOffset.x
+    worldOffsetZ.value = map.worldOffset.z
+    applyMapType()
     rebuildTerrain()
     updateSelectionHelper()
     updateToolUI()
@@ -1107,9 +1230,10 @@ let brushRadius = 3.2
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
       model.userData.layerId = placed.layerId || activeLayerId
+      if (placed.trigger) model.userData.trigger = { ...placed.trigger }
       const _layer = layers.find((l) => l.id === model.userData.layerId)
       model.visible = _layer ? _layer.visible : true
-      placedGroup.add(model)
+      addPlacedModel(model)
     }
 
     rebuildTerrain()
@@ -1480,7 +1604,7 @@ let brushRadius = 3.2
     model.userData.layerId = placed.layerId || activeLayerId
     const _importLayer = layers.find((l) => l.id === model.userData.layerId)
     model.visible = _importLayer ? _importLayer.visible : true
-    placedGroup.add(model)
+    addPlacedModel(model)
   }
 
   rebuildTerrain()
@@ -1724,15 +1848,31 @@ let brushRadius = 3.2
     for (const obj of placedGroup.children) {
       if (excludeObjects.includes(obj)) continue
       if (!obj.visible) continue
-      obj.updateWorldMatrix(true, true)
-      const box = new THREE.Box3().setFromObject(obj)
-      if (box.isEmpty()) continue
-      if (
-        worldX >= box.min.x - MARGIN && worldX <= box.max.x + MARGIN &&
-        worldZ >= box.min.z - MARGIN && worldZ <= box.max.z + MARGIN &&
-        (bestTop === null || box.max.y > bestTop)
-      ) {
-        bestTop = box.max.y
+
+      // Use static bounds from load time to avoid animated sub-meshes inflating the box
+      const bounds = obj.userData.bounds
+      if (bounds) {
+        const halfW = (bounds.width  * obj.scale.x) * 0.5 + MARGIN
+        const halfD = (bounds.depth  * obj.scale.z) * 0.5 + MARGIN
+        const top   =  obj.position.y + bounds.height * obj.scale.y
+        if (
+          worldX >= obj.position.x - halfW && worldX <= obj.position.x + halfW &&
+          worldZ >= obj.position.z - halfD && worldZ <= obj.position.z + halfD &&
+          (bestTop === null || top > bestTop)
+        ) {
+          bestTop = top
+        }
+      } else {
+        obj.updateWorldMatrix(true, true)
+        const box = new THREE.Box3().setFromObject(obj)
+        if (box.isEmpty()) continue
+        if (
+          worldX >= box.min.x - MARGIN && worldX <= box.max.x + MARGIN &&
+          worldZ >= box.min.z - MARGIN && worldZ <= box.max.z + MARGIN &&
+          (bestTop === null || box.max.y > bestTop)
+        ) {
+          bestTop = box.max.y
+        }
       }
     }
     return bestTop
@@ -2099,21 +2239,15 @@ function applyToolAtTile(tile, eventLike = null) {
       if (snap) { pos.x = snap.x; pos.z = snap.z }
     }
     if (event) {
-      const objTop = findObjectTopAt(pos.x, pos.z)
-      const planeTop = findTexturePlaneTopAt(event)
-      if (objTop !== null || planeTop !== null) {
-        pos.y = Math.max(objTop ?? -Infinity, planeTop ?? -Infinity)
-      } else {
-        const sp = pickSurfacePoint(event)
-        if (sp) pos.y = sp.y
-      }
+      const sp = pickSurfacePoint(event)
+      if (sp) pos.y = sp.y
     }
     model.position.copy(pos)
     model.rotation.y = previewRotation
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
     model.userData.layerId = activeLayerId
-    placedGroup.add(model)
+    addPlacedModel(model)
     rebuildTerrain()
   }
 
@@ -2145,8 +2279,8 @@ function applyToolAtTile(tile, eventLike = null) {
       model.userData.layerId = obj.userData.layerId || activeLayerId
       const _rLayer = layers.find((l) => l.id === model.userData.layerId)
       model.visible = _rLayer ? _rLayer.visible : true
-      placedGroup.remove(obj)
-      placedGroup.add(model)
+      removePlacedModel(obj)
+      addPlacedModel(model)
       replacements.push(model)
     }
     selectedPlacedObjects = replacements
@@ -2246,7 +2380,7 @@ function applyToolAtTile(tile, eventLike = null) {
         model.userData.assetId = asset.id
         model.userData.type = 'asset'
         model.userData.layerId = src.userData.layerId || activeLayerId
-        placedGroup.add(model)
+        addPlacedModel(model)
         model.updateMatrixWorld(true)
 
         if (mode === 'stack') {
@@ -2288,7 +2422,7 @@ function applyToolAtTile(tile, eventLike = null) {
       model.userData.type = 'asset'
       model.userData.layerId = selectedPlacedObject.userData.layerId || activeLayerId
 
-      placedGroup.add(model)
+      addPlacedModel(model)
       model.updateMatrixWorld(true)
 
       const sourceFootprint = getObjectFootprint(model)
@@ -2834,16 +2968,6 @@ function applyToolAtTile(tile, eventLike = null) {
 
   async function getSaveHandle() {
     if (saveFileHandle) return saveFileHandle
-    // Try to restore handle from IndexedDB
-    try {
-      const stored = await idbGet('saveFileHandle')
-      if (stored) {
-        const perm = await stored.queryPermission({ mode: 'readwrite' })
-        if (perm === 'granted') { saveFileHandle = stored; return saveFileHandle }
-        const req = await stored.requestPermission({ mode: 'readwrite' })
-        if (req === 'granted') { saveFileHandle = stored; return saveFileHandle }
-      }
-    } catch {}
     return null
   }
 
@@ -2876,16 +3000,16 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   saveMapBtn.addEventListener('click', async () => {
-    if (!window.showSaveFilePicker) { downloadJSON('main.json', buildSaveData()); return }
+    const suggestedName = map.mapType === 'dungeon' ? 'dungeon.json' : 'main.json'
+    if (!window.showSaveFilePicker) { downloadJSON(suggestedName, buildSaveData()); return }
     try {
       let handle = await getSaveHandle()
       if (!handle) {
         handle = await window.showSaveFilePicker({
-          suggestedName: 'main.json',
+          suggestedName,
           types: [{ description: 'JSON Map', accept: { 'application/json': ['.json'] } }]
         })
         saveFileHandle = handle
-        await idbSet('saveFileHandle', handle)
       }
       const writable = await handle.createWritable()
       await writable.write(JSON.stringify(buildSaveData(), null, 2))
@@ -2937,6 +3061,53 @@ function applyToolAtTile(tile, eventLike = null) {
     const prev = statusText.textContent
     statusText.textContent = `Chunk imported at (${offsetX}, ${offsetZ})`
     setTimeout(() => { statusText.textContent = prev }, 2500)
+  })
+
+  const DUNGEON_THRESHOLD = 2000
+
+  function applyMapType() {
+    const isDungeon = map.worldOffset.x >= DUNGEON_THRESHOLD
+    map.mapType = isDungeon ? 'dungeon' : 'overworld'
+
+    if (isDungeon) {
+      scene.background = new THREE.Color(0x000000)
+      scene.fog = new THREE.Fog(0x000000, 18, 48)
+      sun.intensity = 0.3
+      sun.color.set(0x6a4a20)
+      fillLight.intensity = 0.25
+      fillLight.color.set(0x4a3010)
+      ambientMain.color.set(0x7a6040)
+      ambientMain.intensity = 0.85
+      ambientGreen.intensity = 0.0
+      hemiLight.intensity = 0.0
+    } else {
+      scene.background = new THREE.Color(0x0a1205)
+      scene.fog = new THREE.Fog(0x0a1205, 22, 72)
+      sun.intensity = 1.1
+      sun.color.set(0xffd78a)
+      fillLight.intensity = 0.65
+      fillLight.color.set(0xaabbcc)
+      ambientMain.color.set(0x8a8a8a)
+      ambientMain.intensity = 0.62
+      ambientGreen.intensity = 0.08
+      hemiLight.intensity = 0.18
+    }
+
+    GROUND_TYPES = isDungeon ? GROUND_TYPES_DUNGEON : GROUND_TYPES_OVERWORLD
+    buildGroundSwatches()
+  }
+
+  const worldOffsetX = topBar.querySelector('#worldOffsetX')
+  const worldOffsetZ = topBar.querySelector('#worldOffsetZ')
+
+  worldOffsetX.addEventListener('change', () => {
+    const v = Number(worldOffsetX.value)
+    if (Number.isFinite(v)) { map.worldOffset.x = v; applyMapType() }
+  })
+
+  worldOffsetZ.addEventListener('change', () => {
+    const v = Number(worldOffsetZ.value)
+    if (Number.isFinite(v)) map.worldOffset.z = v
   })
 
   resizeMapBtn.addEventListener('click', () => {
@@ -3159,10 +3330,8 @@ function applyToolAtTile(tile, eventLike = null) {
         if (transformLift !== 0) {
           targetY = selectedPlacedObject.position.y
         } else if (!event.altKey) {
-          const objTop = findObjectTopAt(snappedX, snappedZ, selectedPlacedObjects)
-          const planeTop = findTexturePlaneTopAt(event)
-          const surfaceTop = Math.max(objTop ?? -Infinity, planeTop ?? -Infinity)
-          targetY = surfaceTop > -Infinity ? surfaceTop : (terrainPoint?.y ?? selectedPlacedObject.position.y)
+          const sp = pickSurfacePoint(event, selectedPlacedObjects)
+          targetY = sp?.y ?? terrainPoint?.y ?? selectedPlacedObject.position.y
         } else {
           targetY = terrainPoint?.y ?? selectedPlacedObject.position.y
         }
@@ -3618,7 +3787,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
       if (selectedPlacedObjects.length > 0) {
         pushUndoState()
-        for (const obj of selectedPlacedObjects) placedGroup.remove(obj)
+        for (const obj of selectedPlacedObjects) removePlacedModel(obj)
         selectedPlacedObject = null
         selectedPlacedObjects = []
         rebuildTerrain()
@@ -3660,7 +3829,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
 if (key === 'q') {
-  pushUndoState()
+  if (!event.repeat) pushUndoState()
   if (brushRadius < 0.6) {
     map.adjustVertexHeight(x,     z,     0.18)
     map.adjustVertexHeight(x + 1, z,     0.18)
@@ -3674,7 +3843,7 @@ if (key === 'q') {
 }
 
 if (key === 'e') {
-  pushUndoState()
+  if (!event.repeat) pushUndoState()
   if (brushRadius < 0.6) {
     map.adjustVertexHeight(x,     z,     -0.18)
     map.adjustVertexHeight(x + 1, z,     -0.18)
@@ -3897,8 +4066,12 @@ if (key === 'e') {
   pushUndoState()
 
   async function initDefaultSave() {
+    const params = new URLSearchParams(window.location.search)
+    const mapParam = params.get('map')
+    if (!mapParam) return
+
     try {
-      const res = await fetch('/worldsave/main.json')
+      const res = await fetch(`/worldsave/${encodeURIComponent(mapParam)}.json`)
       if (!res.ok) return
       const data = await res.json()
       await loadSaveData(data)
@@ -3916,6 +4089,8 @@ if (key === 'e') {
     } else if (selectionHelper) {
       selectionHelper.update()
     }
+    const delta = clock.getDelta()
+    for (const mixer of mixers.values()) mixer.update(delta)
     const t = performance.now() * 0.0003
     waterTexture.offset.set(t * 0.18, t * 0.09)
     renderer.render(scene, camera)

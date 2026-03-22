@@ -32,6 +32,14 @@ function groundColor(type, shade) {
     return new THREE.Color(0.40 * shade, 0.47 * shade, 0.66 * shade)
   }
 
+  if (type === 'dungeon-floor') {
+    return new THREE.Color(0.22 * shade, 0.17 * shade, 0.11 * shade)
+  }
+
+  if (type === 'dungeon-rock') {
+    return new THREE.Color(0.28 * shade, 0.20 * shade, 0.12 * shade)
+  }
+
   return new THREE.Color(0.13 * shade, 0.43 * shade, 0.07 * shade)
 }
 

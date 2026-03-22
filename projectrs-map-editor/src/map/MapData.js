@@ -3,6 +3,8 @@ export class MapData {
     this.width = width
     this.height = height
 
+    this.mapType = 'overworld'   // 'overworld' | 'dungeon'
+    this.worldOffset = { x: 0, z: 0 }  // world-space origin of this chunk
     this.waterLevel = -2.5
     this.chunkWaterLevels = {}   // keyed "chunkX,chunkZ", overrides waterLevel per 64x64 chunk
     this.texturePlanes = []
@@ -303,6 +305,8 @@ export class MapData {
 
   resize(newWidth, newHeight) {
     const next = new MapData(newWidth, newHeight)
+    next.mapType = this.mapType
+    next.worldOffset = { ...this.worldOffset }
     next.waterLevel = this.waterLevel
     next.chunkWaterLevels = { ...this.chunkWaterLevels }
     next.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes))
@@ -327,6 +331,8 @@ export class MapData {
     return {
       width: this.width,
       height: this.height,
+      mapType: this.mapType,
+      worldOffset: { ...this.worldOffset },
       waterLevel: this.waterLevel,
       chunkWaterLevels: { ...this.chunkWaterLevels },
       selectedTexturePlaneId: this.selectedTexturePlaneId,
@@ -339,6 +345,11 @@ export class MapData {
   static fromJSON(data) {
     const map = new MapData(data.width, data.height)
 
+    map.mapType = data.mapType === 'dungeon' ? 'dungeon' : 'overworld'
+    map.worldOffset = {
+      x: typeof data.worldOffset?.x === 'number' ? data.worldOffset.x : 0,
+      z: typeof data.worldOffset?.z === 'number' ? data.worldOffset.z : 0
+    }
     map.waterLevel = typeof data.waterLevel === 'number' ? data.waterLevel : -2.5
     map.chunkWaterLevels = (data.chunkWaterLevels && typeof data.chunkWaterLevels === 'object')
       ? { ...data.chunkWaterLevels }
