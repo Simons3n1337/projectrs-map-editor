@@ -411,16 +411,6 @@
       "path": "/assets/models/flat roof.glb"
     },
     {
-      "id": "tile roofing",
-      "name": "Tile Roofing",
-      "path": "/assets/models/tile roofing.glb"
-    },
-    {
-      "id": "tile roofing2",
-      "name": "Tile Roofing2",
-      "path": "/assets/models/tile roofing2.glb"
-    },
-    {
       "id": "wood arrowslit",
       "name": "Wood Arrowslit",
       "path": "/assets/Modular assets/Wood modular /wood arrowslit.glb"
@@ -501,6 +491,21 @@
       "path": "/assets/models/stree magic.glb"
     },
     {
+      "id": "castle1doorrealwood",
+      "name": "Castle Door Real Wood",
+      "path": "/assets/models/Castle1DoorRealWood.glb"
+    },
+    {
+      "id": "rice",
+      "name": "Rice",
+      "path": "/assets/models/rice.glb"
+    },
+    {
+      "id": "onepersonbed1",
+      "name": "One Person Bed",
+      "path": "/assets/models/OnePersonBed1.glb"
+    },
+    {
       "id": "new stone arrowslit",
       "name": "New Stone Arrowslit",
       "path": "/assets/Modular assets/new stone modular/stone arrowslit.glb"
@@ -514,6 +519,36 @@
       "id": "new stone window",
       "name": "New Stone Window",
       "path": "/assets/Modular assets/new stone modular/stone window.glb"
+    },
+    {
+      "id": "roof",
+      "name": "Roof",
+      "path": "/assets/Roofs/roof.glb"
+    },
+    {
+      "id": "roof corner",
+      "name": "Roof Corner",
+      "path": "/assets/Roofs/roof corner.glb"
+    },
+    {
+      "id": "roof corner inverse",
+      "name": "Roof Corner Inverse",
+      "path": "/assets/Roofs/roof corner inverse.glb"
+    },
+    {
+      "id": "roof triangle",
+      "name": "Roof Triangle",
+      "path": "/assets/Roofs/roof triangle.glb"
+    },
+    {
+      "id": "tile roofing",
+      "name": "Tile Roofing",
+      "path": "/assets/Roofs/tile roofing.glb"
+    },
+    {
+      "id": "tile roofing2",
+      "name": "Tile Roofing 2",
+      "path": "/assets/Roofs/tile roofing2.glb"
     }
   ]
 }

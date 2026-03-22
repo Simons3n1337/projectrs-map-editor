@@ -33,8 +33,16 @@ scene.add(new THREE.AmbientLight(0x5c6448, 0.08))
 scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18))
 
 function tuneModelLighting(model, assetPath = '') {
-  const isModular = assetPath.toLowerCase().includes('modular assets')
-  const isWoodModular = assetPath.toLowerCase().includes('wood modular')
+  const pathLower = assetPath.toLowerCase()
+  const isModular = pathLower.includes('modular assets')
+  const isWoodModular = pathLower.includes('wood modular')
+  const isWhiteModular = pathLower.includes('white')
+
+  // ── Brightness scalar for "white" named modular assets ──────────────────
+  // White pieces are MeshBasicMaterial (unlit) so their colour renders at
+  // full intensity. Lower this value to dim them; raise it to brighten.
+  const WHITE_MODULAR_BRIGHTNESS = 0.55
+  // ────────────────────────────────────────────────────────────────────────
 
   model.traverse((child) => {
     if (!child.isMesh || !child.material) return
@@ -49,7 +57,18 @@ function tuneModelLighting(model, assetPath = '') {
 
       let mat
 
-      if (isWoodModular) {
+      if (isWhiteModular) {
+        // Flat unlit — dimmed so white pieces don't blow out in the editor
+        mat = new THREE.MeshBasicMaterial({
+          map: src.map || null,
+          color: src.color ? src.color.clone().multiplyScalar(WHITE_MODULAR_BRIGHTNESS) : new THREE.Color(WHITE_MODULAR_BRIGHTNESS, WHITE_MODULAR_BRIGHTNESS, WHITE_MODULAR_BRIGHTNESS),
+          alphaMap: src.alphaMap || null,
+          alphaTest,
+          side: THREE.DoubleSide,
+          transparent: isAlphaCutout ? false : !!src.transparent,
+          depthWrite: true
+        })
+      } else if (isWoodModular) {
         // Flat unlit — same as other modular, no lighting/shadows
         mat = new THREE.MeshBasicMaterial({
           map: src.map || null,
@@ -320,6 +339,7 @@ let brushRadius = 3.2
         <button class="asset-tab active" id="tabProps">Props</button>
         <button class="asset-tab" id="tabModular">Modular</button>
         <button class="asset-tab" id="tabWalls">Walls</button>
+        <button class="asset-tab" id="tabRoofs">Roofs</button>
       </div>
       <select id="assetGroupSelect" style="display:none"></select>
       <input id="assetSearch" type="text" placeholder="Search assets..." />
@@ -335,7 +355,7 @@ let brushRadius = 3.2
         X Y Z axis lock · click confirm · Esc cancel<br>
         Q/E raise/lower while moving · Shift snap<br>
         Alt free move (bypass snap) · K snap to grid<br>
-        Shift+D duplicate right · Alt+D forward<br>
+        Shift+D / Ctrl+Shift+D dup right · Ctrl+D left · Alt+D forward · Alt+A back<br>
         Shift+A stack upward<br>
         Delete / Backspace remove selected
       </div>
@@ -411,7 +431,7 @@ let brushRadius = 3.2
       <b>Transform:</b> G move · R rotate · S scale · X/Y/Z axis · click confirm · Esc cancel<br>
       <b>While moving:</b> Q raise · E lower · Shift snap to grid · Alt disable edge snap<br>
       <b>Terrain:</b> Q/E raise/lower hovered · L level mode · F flip tile split<br>
-      <b>Duplicate:</b> Shift+D right · Alt+D forward · Shift+A stack up<br>
+      <b>Duplicate:</b> Shift+D / Ctrl+Shift+D right · Ctrl+D left · Alt+D forward · Alt+A back · Shift+A stack up<br>
       <b>Other:</b> K snap to grid · V toggle plane vertical/horizontal · Del remove selected
     </div>
   `
@@ -447,6 +467,7 @@ let brushRadius = 3.2
   const tabProps = sidebar.querySelector('#tabProps')
   const tabModular = sidebar.querySelector('#tabModular')
   const tabWalls = sidebar.querySelector('#tabWalls')
+  const tabRoofs = sidebar.querySelector('#tabRoofs')
   const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
   const assetSearch = sidebar.querySelector('#assetSearch')
   const assetGrid = sidebar.querySelector('#assetGrid')
@@ -574,6 +595,7 @@ let brushRadius = 3.2
     { id: 'path',  label: 'Path',  color: '#8a7860' },
     { id: 'road',  label: 'Road',  color: '#7a7870' },
     { id: 'water', label: 'Mud', color: '#5a3d1a' },
+    { id: 'surface-water', label: 'Paddy Water', color: '#7ab8c8' },
   ]
 
   function buildGroundSwatches() {
@@ -606,7 +628,7 @@ let brushRadius = 3.2
   }
 
   function applyLayerVisibility() {
-    if (heightCullEnabled) { applyHeightCull(); return }
+    if (heightCullLevel > 0) { applyHeightCull(); return }
     for (const obj of placedGroup.children) {
       const layer = layers.find((l) => l.id === (obj.userData.layerId || 'layer_0'))
       obj.visible = layer ? layer.visible : true
@@ -1303,6 +1325,7 @@ let brushRadius = 3.2
     }
 
     updateSelectionHelper()
+    applyLayerVisibility()
   }
 
   function updateTexturePlaneMeshTransform(plane) {
@@ -1357,7 +1380,7 @@ let brushRadius = 3.2
 
     const terrainHits = raycaster.intersectObjects(getTerrainMeshes(), false)
 
-    const eligible = placedGroup.children.filter(o => !excludeObjects.includes(o))
+    const eligible = placedGroup.children.filter(o => o.visible && !excludeObjects.includes(o))
     const placedHits = raycaster.intersectObjects(eligible, true).filter(hit => {
       if (!hit.face) return false
       hit.object.getWorldQuaternion(_surfaceQuat)
@@ -1365,8 +1388,9 @@ let brushRadius = 3.2
       return worldNormalY > 0.5  // only upward-facing surfaces (roofs, floors)
     })
 
-    const planeHits = texturePlaneGroup
-      ? raycaster.intersectObjects(texturePlaneGroup.children, true).filter(hit => {
+    const visiblePlanes = texturePlaneGroup ? texturePlaneGroup.children.filter(m => m.visible) : []
+    const planeHits = visiblePlanes.length
+      ? raycaster.intersectObjects(visiblePlanes, true).filter(hit => {
           if (!hit.face) return false
           hit.object.getWorldQuaternion(_surfaceQuat)
           const worldNormalY = hit.face.normal.clone().applyQuaternion(_surfaceQuat).y
@@ -1392,7 +1416,8 @@ let brushRadius = 3.2
   function pickPlacedObject(event) {
     updateMouse(event)
     raycaster.setFromCamera(mouse, camera)
-    const hits = raycaster.intersectObjects(placedGroup.children, true)
+    const visible = placedGroup.children.filter(o => o.visible)
+    const hits = raycaster.intersectObjects(visible, true)
     if (!hits.length) return null
 
     let obj = hits[0].object
@@ -1468,7 +1493,8 @@ let brushRadius = 3.2
 
     updateMouse(event)
     raycaster.setFromCamera(mouse, camera)
-    const hits = raycaster.intersectObjects(texturePlaneGroup.children, true)
+    const visible = texturePlaneGroup.children.filter(m => m.visible)
+    const hits = raycaster.intersectObjects(visible, true)
     if (!hits.length) return null
     return hits[0].object
   }
@@ -1478,9 +1504,11 @@ let brushRadius = 3.2
     updateMouse(event)
     raycaster.setFromCamera(mouse, camera)
 
-    const placedHits = raycaster.intersectObjects(placedGroup.children, true)
-    const planeHits = texturePlaneGroup
-      ? raycaster.intersectObjects(texturePlaneGroup.children, true)
+    const visiblePlaced = placedGroup.children.filter(o => o.visible)
+    const placedHits = raycaster.intersectObjects(visiblePlaced, true)
+    const visiblePlanesSelect = texturePlaneGroup ? texturePlaneGroup.children.filter(m => m.visible) : []
+    const planeHits = visiblePlanesSelect.length
+      ? raycaster.intersectObjects(visiblePlanesSelect, true)
       : []
 
     const bestPlaced = placedHits[0] ?? null
@@ -1654,14 +1682,15 @@ let brushRadius = 3.2
     const target = getPlaneFootprint(targetPlane)
     const rotY = targetPlane.rotation.y || 0
 
-    const vec = direction === 'forward' ? getForwardVector(rotY) : getRightVector(rotY)
-    const spacing =
-      direction === 'forward'
-        ? (source.depth + target.depth) * 0.5
-        : (source.width + target.width) * 0.5
+    const isForward = direction === 'forward' || direction === 'back'
+    const sign = (direction === 'left' || direction === 'back') ? -1 : 1
+    const vec = isForward ? getForwardVector(rotY) : getRightVector(rotY)
+    const spacing = isForward
+      ? (source.depth + target.depth) * 0.5
+      : (source.width + target.width) * 0.5
 
-    sourcePlane.position.x = targetPlane.position.x + vec.x * spacing
-    sourcePlane.position.z = targetPlane.position.z + vec.z * spacing
+    sourcePlane.position.x = targetPlane.position.x + vec.x * spacing * sign
+    sourcePlane.position.z = targetPlane.position.z + vec.z * spacing * sign
     sourcePlane.position.y = targetPlane.position.y
   }
 
@@ -1678,7 +1707,8 @@ let brushRadius = 3.2
     if (!texturePlaneGroup) return null
     updateMouse(event)
     raycaster.setFromCamera(mouse, camera)
-    const hits = raycaster.intersectObjects(texturePlaneGroup.children, true)
+    const visible = texturePlaneGroup.children.filter(m => m.visible)
+    const hits = raycaster.intersectObjects(visible, true)
     for (const hit of hits) {
       if (!hit.face) continue
       hit.object.getWorldQuaternion(_surfaceQuat)
@@ -1748,17 +1778,20 @@ let brushRadius = 3.2
   }
 
   function snapObjectFlushAlongPosition(basePosition, baseRotationY, targetFootprint, sourceFootprint, direction = 'right') {
-    const vec = direction === 'forward' ? getForwardVector(baseRotationY) : getRightVector(baseRotationY)
+    const isForward = direction === 'forward' || direction === 'back'
+    const sign = (direction === 'left' || direction === 'back') ? -1 : 1
+    const vec = isForward ? getForwardVector(baseRotationY) : getRightVector(baseRotationY)
 
-    const spacing =
-      direction === 'forward'
-        ? (targetFootprint.depth + sourceFootprint.depth) * 0.5
-        : (targetFootprint.width + sourceFootprint.width) * 0.5
+    // Project AABB extents onto the movement direction so spacing is correct at any rotation
+    const ax = Math.abs(vec.x), az = Math.abs(vec.z)
+    const targetExtent = ax * targetFootprint.width + az * targetFootprint.depth
+    const sourceExtent = ax * sourceFootprint.width + az * sourceFootprint.depth
+    const spacing = (targetExtent + sourceExtent) * 0.5
 
     return new THREE.Vector3(
-      basePosition.x + vec.x * spacing,
+      basePosition.x + vec.x * spacing * sign,
       basePosition.y,
-      basePosition.z + vec.z * spacing
+      basePosition.z + vec.z * spacing * sign
     )
   }
 
@@ -1898,6 +1931,16 @@ function applyToolAtTile(tile, eventLike = null) {
   if (state.tool === ToolMode.PAINT) {
     captureStrokeHistoryOnce()
 
+    if (state.paintType === 'surface-water') {
+      if (eventLike?.shiftKey) {
+        map.clearWaterSurface(tile.x, tile.z)
+      } else {
+        map.paintWaterSurface(tile.x, tile.z)
+      }
+      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+      return
+    }
+
     if (eventLike?.shiftKey || paintTabTextureId) {
       const isErase = eventLike?.shiftKey || paintTabTextureId === '__erase__'
       if (state.halfPaint && paintTabTextureIdB && !isErase) {
@@ -1922,7 +1965,7 @@ function applyToolAtTile(tile, eventLike = null) {
         if (isErase) map.clearTextureTile(tile.x, tile.z)
         else map.paintTextureTile(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale, textureWorldUV)
       }
-      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true })
       return
     }
 
@@ -2122,10 +2165,10 @@ function applyToolAtTile(tile, eventLike = null) {
         let offsetX = 0, offsetZ = 0, offsetY = 0
         if (mode !== 'stack') {
           const primaryClone = JSON.parse(JSON.stringify(selectedTexturePlane))
-          if (mode === 'forward') {
-            snapPlaneFlushAlong(primaryClone, selectedTexturePlane, 'forward')
+          if (mode === 'forward' || mode === 'back') {
+            snapPlaneFlushAlong(primaryClone, selectedTexturePlane, mode)
           } else {
-            snapPlaneFlushAlong(primaryClone, selectedTexturePlane, 'right')
+            snapPlaneFlushAlong(primaryClone, selectedTexturePlane, mode === 'left' ? 'left' : 'right')
           }
           offsetX = primaryClone.position.x - selectedTexturePlane.position.x
           offsetZ = primaryClone.position.z - selectedTexturePlane.position.z
@@ -2161,10 +2204,8 @@ function applyToolAtTile(tile, eventLike = null) {
 
       if (mode === 'stack') {
         stackPlaneAbove(clone, selectedTexturePlane)
-      } else if (mode === 'forward') {
-        snapPlaneFlushAlong(clone, selectedTexturePlane, 'forward')
       } else {
-        snapPlaneFlushAlong(clone, selectedTexturePlane, 'right')
+        snapPlaneFlushAlong(clone, selectedTexturePlane, mode === 'forward' || mode === 'back' ? mode : (mode === 'left' ? 'left' : 'right'))
       }
 
       map.texturePlanes.push(clone)
@@ -2187,7 +2228,7 @@ function applyToolAtTile(tile, eventLike = null) {
           selectedPlacedObject.rotation.y,
           primaryFootprint,
           primaryFootprint,
-          mode === 'forward' ? 'forward' : 'right'
+          ['forward','back'].includes(mode) ? mode : (mode === 'left' ? 'left' : 'right')
         )
         offsetVec = newPos.clone().sub(selectedPlacedObject.position)
       }
@@ -2206,6 +2247,7 @@ function applyToolAtTile(tile, eventLike = null) {
         model.userData.type = 'asset'
         model.userData.layerId = src.userData.layerId || activeLayerId
         placedGroup.add(model)
+        model.updateMatrixWorld(true)
 
         if (mode === 'stack') {
           const srcFootprint = getObjectFootprint(src)
@@ -2247,6 +2289,7 @@ function applyToolAtTile(tile, eventLike = null) {
       model.userData.layerId = selectedPlacedObject.userData.layerId || activeLayerId
 
       placedGroup.add(model)
+      model.updateMatrixWorld(true)
 
       const sourceFootprint = getObjectFootprint(model)
 
@@ -2260,7 +2303,7 @@ function applyToolAtTile(tile, eventLike = null) {
             selectedPlacedObject.rotation.y,
             targetFootprint,
             sourceFootprint,
-            mode === 'forward' ? 'forward' : 'right'
+            ['forward','back'].includes(mode) ? mode : (mode === 'left' ? 'left' : 'right')
           )
         )
       }
@@ -2704,12 +2747,13 @@ function applyToolAtTile(tile, eventLike = null) {
     updateToolUI()
   })
 
+  const allTabs = [tabProps, tabModular, tabWalls, tabRoofs]
+  const clearTabs = () => allTabs.forEach(t => t.classList.remove('active'))
+
   tabProps.addEventListener('click', async () => {
     assetSectionFilter = 'Models'
     assetGroupFilter = 'all'
-    tabProps.classList.add('active')
-    tabModular.classList.remove('active')
-    tabWalls.classList.remove('active')
+    clearTabs(); tabProps.classList.add('active')
     assetGroupSelect.style.display = 'none'
     refreshAssetList()
     await updatePreviewObject()
@@ -2718,9 +2762,7 @@ function applyToolAtTile(tile, eventLike = null) {
   tabModular.addEventListener('click', async () => {
     assetSectionFilter = 'Modular Assets'
     assetGroupFilter = 'all'
-    tabModular.classList.add('active')
-    tabProps.classList.remove('active')
-    tabWalls.classList.remove('active')
+    clearTabs(); tabModular.classList.add('active')
     assetGroupSelect.style.display = ''
     refreshAssetGroupOptions()
     refreshAssetList()
@@ -2730,9 +2772,16 @@ function applyToolAtTile(tile, eventLike = null) {
   tabWalls.addEventListener('click', async () => {
     assetSectionFilter = '__walls__'
     assetGroupFilter = 'all'
-    tabWalls.classList.add('active')
-    tabProps.classList.remove('active')
-    tabModular.classList.remove('active')
+    clearTabs(); tabWalls.classList.add('active')
+    assetGroupSelect.style.display = 'none'
+    refreshAssetList()
+    await updatePreviewObject()
+  })
+
+  tabRoofs.addEventListener('click', async () => {
+    assetSectionFilter = 'Roofs'
+    assetGroupFilter = 'all'
+    clearTabs(); tabRoofs.classList.add('active')
     assetGroupSelect.style.display = 'none'
     refreshAssetList()
     await updatePreviewObject()
@@ -2945,9 +2994,15 @@ function applyToolAtTile(tile, eventLike = null) {
   })
 
   function toggleHeightCull() {
-    heightCullEnabled = !heightCullEnabled
-    sidebar.querySelector('#heightCullBtn')?.classList.toggle('active-tool', heightCullEnabled)
-    if (heightCullEnabled) applyHeightCull()
+    heightCullLevel = (heightCullLevel + 1) % 3
+    const btn = sidebar.querySelector('#heightCullBtn')
+    if (btn) {
+      btn.classList.toggle('active-tool', heightCullLevel > 0)
+      btn.title = heightCullLevel === 0 ? 'Hide objects above camera height (H)'
+        : heightCullLevel === 1 ? 'Height Cull: level 1 (H to go higher)'
+        : 'Height Cull: level 2 (H to disable)'
+    }
+    if (heightCullLevel > 0) applyHeightCull()
     else applyLayerVisibility()
   }
 
@@ -3353,13 +3408,17 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
   let pitch = 1.02
   let distance = 31
   const target = new THREE.Vector3(12, 2, 12)
-  let heightCullEnabled = false
+  let heightCullLevel = 0 // 0=off, 1=at camera height, 2=one level higher
+  const HEIGHT_CULL_STEP = 3
 
   function applyHeightCull() {
+    const cullThreshold = heightCullLevel === 0 ? Infinity
+      : heightCullLevel === 1 ? target.y
+      : target.y + HEIGHT_CULL_STEP
     for (const obj of placedGroup.children) {
       const layer = layers.find((l) => l.id === (obj.userData.layerId || 'layer_0'))
       const layerVisible = layer ? layer.visible : true
-      obj.visible = layerVisible && (!heightCullEnabled || obj.position.y <= target.y)
+      obj.visible = layerVisible && obj.position.y <= cullThreshold
     }
     if (texturePlaneGroup) {
       for (const mesh of texturePlaneGroup.children) {
@@ -3367,7 +3426,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         if (!plane) continue
         const layer = layers.find((l) => l.id === (plane.layerId || 'layer_0'))
         const layerVisible = layer ? layer.visible : true
-        mesh.visible = layerVisible && (!heightCullEnabled || plane.position.y <= target.y)
+        mesh.visible = layerVisible && plane.position.y <= cullThreshold
       }
     }
   }
@@ -3378,7 +3437,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     camera.position.z = target.z + Math.sin(yaw) * Math.sin(pitch) * distance
     camera.lookAt(target)
     updateCompass()
-    if (heightCullEnabled) applyHeightCull()
+    if (heightCullLevel > 0) applyHeightCull()
   }
 
   function panCamera(deltaX, deltaY) {
@@ -3452,13 +3511,22 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       if (selectedPlacedObject) {
         const delta = e.shiftKey ? (e.deltaY > 0 ? 1 : -1) * 0.1 : (e.deltaY > 0 ? 1 : -1) * (Math.PI / 12)
 
-        selectedPlacedObject.rotation[axis] += delta
-        if (!e.shiftKey) selectedPlacedObject.rotation[axis] = snapAngleToQuarterIfClose(selectedPlacedObject.rotation[axis], 0.08)
+        const applyRotation = (obj) => {
+          if (axis === 'y') {
+            // Y-axis (vertical spin): Euler is fine, no gimbal issue, snap supported
+            obj.rotation.y += delta
+            if (!e.shiftKey) obj.rotation.y = snapAngleToQuarterIfClose(obj.rotation.y, 0.08)
+          } else {
+            // X/Z: rotate around absolute world axis to avoid gimbal lock from GLTF baked rotations
+            const worldAxis = axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
+            obj.rotateOnWorldAxis(worldAxis, delta)
+          }
+        }
 
+        applyRotation(selectedPlacedObject)
         for (const obj of selectedPlacedObjects) {
           if (obj === selectedPlacedObject) continue
-          obj.rotation[axis] += delta
-          if (!e.shiftKey) obj.rotation[axis] = snapAngleToQuarterIfClose(obj.rotation[axis], 0.08)
+          applyRotation(obj)
         }
 
         updateSelectionHelper()
@@ -3729,6 +3797,21 @@ if (key === 'e') {
       return
     }
 
+    if (key === 'a' && event.altKey) {
+      await duplicateSelected('back')
+      return
+    }
+
+    if (key === 'd' && event.ctrlKey && event.shiftKey) {
+      await duplicateSelected('right')
+      return
+    }
+
+    if (key === 'd' && event.ctrlKey) {
+      await duplicateSelected('left')
+      return
+    }
+
     if (key === 'd' && event.altKey) {
       await duplicateSelected('forward')
       return
@@ -3747,8 +3830,7 @@ if (key === 'e') {
       // Default to Props tab
       assetSectionFilter = 'Models'
       assetGroupFilter = 'all'
-      tabProps.classList.add('active')
-      tabModular.classList.remove('active')
+      clearTabs(); tabProps.classList.add('active')
       assetGroupSelect.style.display = 'none'
 
       filteredAssets = [...assetRegistry]

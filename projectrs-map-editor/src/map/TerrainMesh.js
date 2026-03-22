@@ -100,32 +100,18 @@ function getVertexWaterProximity(map, vx, vz) {
 }
 
 
-function isCliffNearby(map, x, z) {
-  const h = map.getTileCornerHeights(x, z)
-  const minH = Math.min(h.tl, h.tr, h.bl, h.br)
-  const maxH = Math.max(h.tl, h.tr, h.bl, h.br)
-
-  if ((maxH - minH) > 1.1) return true
-
-  const centerAvg = getTileAverageHeight(h)
-  const neighbors = [
-    [x - 1, z],
-    [x + 1, z],
-    [x, z - 1],
-    [x, z + 1]
-  ]
-
-  for (const [nx, nz] of neighbors) {
-    const n = map.getTile(nx, nz)
-    if (!n) continue
-
-    const nh = map.getTileCornerHeights(nx, nz)
-    const nAvg = getTileAverageHeight(nh)
-
-    if (Math.abs(centerAvg - nAvg) > 0.9) return true
+// Returns 0-1: how strongly this vertex is near a height cliff.
+// Checks all 8 surrounding vertices for the largest height difference.
+function getVertexCliffStrength(map, vx, vz) {
+  const h = map.getVertexHeight(vx, vz)
+  let maxDiff = 0
+  for (const [dx, dz] of [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,-1],[-1,1],[1,1]]) {
+    const nx = vx + dx, nz = vz + dz
+    if (nx < 0 || nx > map.width || nz < 0 || nz > map.height) continue
+    const diff = Math.abs(h - map.getVertexHeight(nx, nz))
+    if (diff > maxDiff) maxDiff = diff
   }
-
-  return false
+  return clamp((maxDiff - 0.9) / 1.1, 0, 1)
 }
 
 function getNoiseExtra(type, vx, vz) {
@@ -240,8 +226,6 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     cBR = getCornerBlendedColor(map, x + 1, z + 1, shadeBR)
   }
 
-  const nearCliff = isCliffNearby(map, x, z)
-
   if (tileType !== 'water') {
     const wLevel = map.getTileWaterLevel(x, z)
 
@@ -276,12 +260,17 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     applyDepth(cBR, h.br)
   }
 
-  if (tileType !== 'water' && nearCliff) {
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 1.04
-      c.g *= 0.92
-      c.b *= 0.84
+  if (tileType !== 'water') {
+    const applyCliffTint = (c, t) => {
+      if (t <= 0) return
+      c.r *= 1 + t * 0.04
+      c.g *= 1 - t * 0.08
+      c.b *= 1 - t * 0.16
     }
+    applyCliffTint(cTL, getVertexCliffStrength(map, x,     z    ))
+    applyCliffTint(cTR, getVertexCliffStrength(map, x + 1, z    ))
+    applyCliffTint(cBL, getVertexCliffStrength(map, x,     z + 1))
+    applyCliffTint(cBR, getVertexCliffStrength(map, x + 1, z + 1))
   }
 
 
@@ -405,6 +394,39 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     }
   }
 
+  // Surface water pass — thin film at terrain height (rice paddies, flooded fields)
+  const swVertices = []
+  const swColors = []
+  const swUVs = []
+  const swIndices = []
+  let swBase = 0
+
+  for (let z = 0; z < map.height; z++) {
+    for (let x = 0; x < map.width; x++) {
+      const tile = map.getTile(x, z)
+      if (!tile?.waterSurface) continue
+
+      const h = map.getTileCornerHeights(x, z)
+      const LIFT = 0.05
+      const WATER_UV_SCALE = 5
+      const u0 = x / WATER_UV_SCALE
+      const u1 = (x + 1) / WATER_UV_SCALE
+      const v0 = z / WATER_UV_SCALE
+      const v1 = (z + 1) / WATER_UV_SCALE
+      const wc = new THREE.Color(0.55, 0.72, 0.78)
+      swVertices.push(
+        x,     h.tl + LIFT, z,
+        x + 1, h.tr + LIFT, z,
+        x,     h.bl + LIFT, z + 1,
+        x + 1, h.br + LIFT, z + 1
+      )
+      swColors.push(wc.r, wc.g, wc.b, wc.r, wc.g, wc.b, wc.r, wc.g, wc.b, wc.r, wc.g, wc.b)
+      swUVs.push(u0, v0,  u1, v0,  u0, v1,  u1, v1)
+      swIndices.push(swBase, swBase + 2, swBase + 1, swBase + 2, swBase + 3, swBase + 1)
+      swBase += 4
+    }
+  }
+
   const group = new THREE.Group()
   group.name = 'terrain-group'
 
@@ -457,6 +479,41 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     waterMesh.name = 'terrain-water'
     waterMesh.receiveShadow = true
     group.add(waterMesh)
+  }
+
+  if (swVertices.length > 0) {
+    const swGeometry = new THREE.BufferGeometry()
+    swGeometry.setAttribute('position', new THREE.Float32BufferAttribute(swVertices, 3))
+    swGeometry.setAttribute('color', new THREE.Float32BufferAttribute(swColors, 3))
+    swGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(swUVs, 2))
+    swGeometry.setIndex(swIndices)
+    swGeometry.computeVertexNormals()
+
+    let swTexture = null
+    if (waterTexture) {
+      swTexture = waterTexture.clone()
+      swTexture.wrapS = THREE.RepeatWrapping
+      swTexture.wrapT = THREE.RepeatWrapping
+      swTexture.colorSpace = THREE.SRGBColorSpace
+      swTexture.offset.set(0, 0)
+      swTexture.needsUpdate = true
+    }
+
+    const swMaterial = new THREE.MeshLambertMaterial({
+      map: swTexture || null,
+      color: swTexture ? 0xe0f4f8 : 0x8ac8d8,
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.25,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    })
+
+    const swMesh = new THREE.Mesh(swGeometry, swMaterial)
+    swMesh.name = 'terrain-surface-water'
+    group.add(swMesh)
   }
 
   return group

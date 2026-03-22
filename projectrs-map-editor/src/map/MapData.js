@@ -24,7 +24,8 @@ export class MapData {
           textureIdB: null,
           textureRotationB: 0,
           textureScaleB: 1,
-          waterPainted: false
+          waterPainted: false,
+          waterSurface: false
         })
       }
       this.tiles.push(row)
@@ -197,6 +198,18 @@ export class MapData {
     tile.waterPainted = false
   }
 
+  paintWaterSurface(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    tile.waterSurface = true
+  }
+
+  clearWaterSurface(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    tile.waterSurface = false
+  }
+
   paintTextureTile(x, z, textureId, rotation = 0, scale = 1, worldUV = false) {
     const tile = this.getTile(x, z)
     if (!tile) return
@@ -353,7 +366,8 @@ export class MapData {
             textureIdB: src.textureIdB || null,
             textureRotationB: src.textureRotationB || 0,
             textureScaleB: src.textureScaleB || 1,
-            waterPainted: !!src.waterPainted || src.ground === 'water'
+            waterPainted: !!src.waterPainted || src.ground === 'water',
+            waterSurface: !!src.waterSurface
           }
         }
       }
