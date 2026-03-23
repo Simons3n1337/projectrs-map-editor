@@ -7,8 +7,10 @@ import { loadTextureRegistry } from './assets-system/TextureRegistry.js'
 import {
   buildTerrainMeshes,
   buildCliffMeshes,
+  buildWaterMeshes,
   buildTextureOverlays,
-  buildTexturePlanes
+  buildTexturePlanes,
+  updateTerrainLandHeights
 } from './map/TerrainMesh.js'
 
 export function createEditorScene(container) {
@@ -156,17 +158,23 @@ function tuneModelLighting(model, assetPath = '') {
 
   function addPlacedModel(model) {
     placedGroup.add(model)
+    _spatialRegister(model)
+    invalidateShadowCache()
     const asset = assetRegistry.find((a) => a.id === model.userData.assetId)
     if (asset) setupModelAnimations(model, asset.path)
   }
 
   function removePlacedModel(model) {
+    _spatialUnregister(model)
+    invalidateShadowCache()
     disposeMixer(model)
     placedGroup.remove(model)
   }
 
   function clearPlacedModels() {
     for (const model of placedGroup.children) disposeMixer(model)
+    _spatialGrid.clear()
+    invalidateShadowCache()
     placedGroup.clear()
   }
 
@@ -232,6 +240,63 @@ function tuneModelLighting(model, assetPath = '') {
 
   function invalidateShadowCache() { _shadowInfluencesCache = null }
 
+  // --- Spatial index for placed objects ---
+  // Divides world into SPATIAL_CELL-sized buckets so findObjectTopAt and
+  // pickSurfacePoint only test objects near the cursor instead of all N objects.
+  const SPATIAL_CELL = 8
+  const _spatialGrid = new Map()
+
+  function _spatialKey(cx, cz) { return cx * 65537 + cz }
+
+  function _spatialRegister(obj) {
+    const bounds = obj.userData.bounds
+    if (!bounds) return
+    const hw = bounds.width  * obj.scale.x * 0.5 + 1
+    const hd = bounds.depth  * obj.scale.z * 0.5 + 1
+    const x0 = Math.floor((obj.position.x - hw) / SPATIAL_CELL)
+    const x1 = Math.floor((obj.position.x + hw) / SPATIAL_CELL)
+    const z0 = Math.floor((obj.position.z - hd) / SPATIAL_CELL)
+    const z1 = Math.floor((obj.position.z + hd) / SPATIAL_CELL)
+    obj.userData._sc = [x0, x1, z0, z1]
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cz = z0; cz <= z1; cz++) {
+        const k = _spatialKey(cx, cz)
+        let cell = _spatialGrid.get(k)
+        if (!cell) { cell = new Set(); _spatialGrid.set(k, cell) }
+        cell.add(obj)
+      }
+    }
+  }
+
+  function _spatialUnregister(obj) {
+    const sc = obj.userData._sc
+    if (!sc) return
+    const [x0, x1, z0, z1] = sc
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cz = z0; cz <= z1; cz++) {
+        const cell = _spatialGrid.get(_spatialKey(cx, cz))
+        if (cell) cell.delete(obj)
+      }
+    }
+    delete obj.userData._sc
+  }
+
+  function _spatialNearby(worldX, worldZ, radius) {
+    const cx0 = Math.floor((worldX - radius) / SPATIAL_CELL)
+    const cx1 = Math.floor((worldX + radius) / SPATIAL_CELL)
+    const cz0 = Math.floor((worldZ - radius) / SPATIAL_CELL)
+    const cz1 = Math.floor((worldZ + radius) / SPATIAL_CELL)
+    const seen = new Set()
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        const cell = _spatialGrid.get(_spatialKey(cx, cz))
+        if (!cell) continue
+        for (const obj of cell) seen.add(obj)
+      }
+    }
+    return seen
+  }
+
   const undoStack = []
   const redoStack = []
   const MAX_HISTORY = 100
@@ -247,12 +312,38 @@ const state = {
   draggedTiles: new Set(),
   levelMode: false,
   levelHeight: null,
+  smoothMode: false,
   historyCapturedThisStroke: false,
   lastTerrainEditTime: 0,
   terrainEditInterval: 110
 }
 
 let brushRadius = 3.2
+
+  // RAF dirty-flag: terrain edits mark this dirty; the actual rebuild happens once per animation frame.
+  let _terrainDirty = false
+  let _terrainDirtyOpts = { skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true }
+  let _terrainDirtyRegion = null  // {x1,z1,x2,z2} when only heights changed; null = full rebuild needed
+
+  function markTerrainDirty({ skipTexturePlanes = false, skipShadows = false, skipTextureOverlays = false, heightsOnly = false, region = null } = {}) {
+    _terrainDirty = true
+    if (!skipTexturePlanes)   _terrainDirtyOpts.skipTexturePlanes   = false
+    if (!skipShadows)         _terrainDirtyOpts.skipShadows         = false
+    if (!skipTextureOverlays) _terrainDirtyOpts.skipTextureOverlays = false
+
+    if (heightsOnly && region) {
+      if (_terrainDirtyRegion) {
+        _terrainDirtyRegion.x1 = Math.min(_terrainDirtyRegion.x1, region.x1)
+        _terrainDirtyRegion.z1 = Math.min(_terrainDirtyRegion.z1, region.z1)
+        _terrainDirtyRegion.x2 = Math.max(_terrainDirtyRegion.x2, region.x2)
+        _terrainDirtyRegion.z2 = Math.max(_terrainDirtyRegion.z2, region.z2)
+      } else {
+        _terrainDirtyRegion = { ...region }
+      }
+    } else {
+      _terrainDirtyRegion = null  // structural change — need full rebuild
+    }
+  }
 
   const raycaster = new THREE.Raycaster()
   raycaster.layers.enable(1)
@@ -337,7 +428,8 @@ let brushRadius = 3.2
     <div class="ctx-panel" id="ctx-terrain">
       <label style="margin-top:0;font-size:11px;color:rgba(255,255,255,0.45);">Brush Size <span id="brushSizeLabel">3.2</span></label>
       <input id="brushSizeSlider" type="range" min="0.4" max="7" step="0.2" value="3.2" style="margin-top:3px;" />
-      <button id="toggleLevelMode" style="margin-top:8px;">Level Mode: Off</button>
+      <button id="toggleSmoothMode" style="margin-top:8px;">Smooth Mode: Off</button>
+      <button id="toggleLevelMode" style="margin-top:4px;">Level Mode: Off</button>
       <div id="levelHeightRow" style="display:none;margin-top:6px;">
         <div style="display:flex;gap:5px;align-items:center;">
           <input id="levelHeightInput" type="number" step="0.25" placeholder="Height" style="flex:1;margin-top:0;" />
@@ -514,6 +606,7 @@ let brushRadius = 3.2
   toolButtons[ToolMode.SELECT]?.addEventListener('click', () => setTool(ToolMode.SELECT))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
 
+  const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
   const saveMapBtn = topBar.querySelector('#saveMapBtn')
   const loadMapInput = topBar.querySelector('#loadMapInput')
@@ -546,7 +639,7 @@ let brushRadius = 3.2
       pushUndoState()
       scaleObjectToTiles(selectedPlacedObject, tiles)
       updateSelectionHelper()
-      rebuildTerrain()
+      markTerrainDirty()
     })
   }
   const customTileSizeInput = sidebar.querySelector('#customTileSize')
@@ -558,7 +651,7 @@ let brushRadius = 3.2
     pushUndoState()
     scaleObjectToTiles(selectedPlacedObject, tiles)
     updateSelectionHelper()
-    rebuildTerrain()
+    markTerrainDirty()
   })
 
   // Trigger metadata handlers
@@ -672,7 +765,7 @@ let brushRadius = 3.2
   mapWidthInput.value = map.width
   mapHeightInput.value = map.height
 
- 
+
 
   const GROUND_TYPES_OVERWORLD = [
     { id: 'grass', label: 'Grass', color: '#3d8a20' },
@@ -892,6 +985,9 @@ let brushRadius = 3.2
 
     updateSwatches()
 
+    smoothModeBtn.textContent = `Smooth Mode: ${state.smoothMode ? 'On' : 'Off'}`
+    smoothModeBtn.classList.toggle('active-tool', state.smoothMode)
+
     levelModeBtn.textContent = `Level Mode: ${state.levelMode ? 'On' : 'Off'}`
     levelModeBtn.classList.toggle('active-tool', state.levelMode)
 
@@ -932,6 +1028,7 @@ let brushRadius = 3.2
     if (state.tool === ToolMode.TEXTURE_PLANE) {
       status += ` · ${texturePlaneVertical ? 'vertical' : 'horizontal'}`
     }
+    if (state.tool === ToolMode.TERRAIN && state.smoothMode) status += ' · Smooth Mode'
     if (state.tool === ToolMode.TERRAIN && state.levelMode) {
       status += ' · Level Mode'
       if (state.levelHeight !== null) status += ` @ ${state.levelHeight.toFixed(2)}`
@@ -1100,6 +1197,14 @@ let brushRadius = 3.2
   async function rebuildPlacedObjectsFromData(placedObjectsData) {
     clearPlacedModels()
 
+    // Pre-load all unique models in parallel so cache is warm before sequential cloning
+    const uniquePaths = [...new Set(
+      (placedObjectsData || [])
+        .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
+        .filter(Boolean)
+    )]
+    await Promise.all(uniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+
     for (const placed of placedObjectsData || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
       if (!asset) continue
@@ -1187,7 +1292,7 @@ let brushRadius = 3.2
     worldOffsetX.value = map.worldOffset.x
     worldOffsetZ.value = map.worldOffset.z
     applyMapType()
-    rebuildTerrain()
+    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -1219,6 +1324,13 @@ let brushRadius = 3.2
     }
 
     // Add placed objects shifted by offset
+    const _importPaths = [...new Set(
+      (data.placedObjects || [])
+        .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
+        .filter(Boolean)
+    )]
+    await Promise.all(_importPaths.map((path) => loadAssetModel(path).catch(() => {})))
+
     for (const placed of data.placedObjects || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
       if (!asset) continue
@@ -1236,7 +1348,7 @@ let brushRadius = 3.2
       addPlacedModel(model)
     }
 
-    rebuildTerrain()
+    markTerrainDirty()
     updateToolUI()
   }
 
@@ -1263,7 +1375,7 @@ let brushRadius = 3.2
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
-    rebuildTerrain()
+    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -1291,21 +1403,23 @@ let brushRadius = 3.2
   function buildSplitLines() {
     const points = []
 
-    for (let z = 0; z < map.height; z++) {
-      for (let x = 0; x < map.width; x++) {
-        const tile = map.getTile(x, z)
-        const h = map.getTileCornerHeights(x, z)
+    if (state.showSplitLines) {
+      for (let z = 0; z < map.height; z++) {
+        for (let x = 0; x < map.width; x++) {
+          const tile = map.getTile(x, z)
+          const h = map.getTileCornerHeights(x, z)
 
-        if (tile.split === 'forward') {
-          points.push(
-            new THREE.Vector3(x, h.tl + 0.03, z),
-            new THREE.Vector3(x + 1, h.br + 0.03, z + 1)
-          )
-        } else {
-          points.push(
-            new THREE.Vector3(x + 1, h.tr + 0.03, z),
-            new THREE.Vector3(x, h.bl + 0.03, z + 1)
-          )
+          if (tile.split === 'forward') {
+            points.push(
+              new THREE.Vector3(x, h.tl + 0.03, z),
+              new THREE.Vector3(x + 1, h.br + 0.03, z + 1)
+            )
+          } else {
+            points.push(
+              new THREE.Vector3(x + 1, h.tr + 0.03, z),
+              new THREE.Vector3(x, h.bl + 0.03, z + 1)
+            )
+          }
         }
       }
     }
@@ -1326,7 +1440,7 @@ let brushRadius = 3.2
     const points = []
     const LIFT = 0.04
 
-    for (let z = 0; z < map.height; z++) {
+    if (state.showTileGrid) for (let z = 0; z < map.height; z++) {
       for (let x = 0; x < map.width; x++) {
         const h = map.getTileCornerHeights(x, z)
 
@@ -1415,11 +1529,59 @@ let brushRadius = 3.2
     return inf
   }
 
-  function rebuildTerrain({ skipTexturePlanes = false, skipShadows = false, skipTextureOverlays = false } = {}) {
-    if (terrainGroup) scene.remove(terrainGroup)
-    if (cliffs) scene.remove(cliffs)
-    if (splitLines) scene.remove(splitLines)
-    if (tileGrid) scene.remove(tileGrid)
+  function disposeGroup(group) {
+    if (!group) return
+    group.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.geometry?.dispose()
+        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose())
+        else obj.material?.dispose()
+      }
+    })
+    scene.remove(group)
+  }
+
+  function rebuildTerrain({ skipTexturePlanes = false, skipShadows = false, skipTextureOverlays = false, _heightsOnlyRegion = null } = {}) {
+    // Fast path: only heights changed in a known tile region — update land mesh in-place.
+    if (_heightsOnlyRegion) {
+      const shadowInf = _shadowInfluencesCache ?? buildObjectShadowInfluences()
+      _shadowInfluencesCache = shadowInf
+      if (updateTerrainLandHeights(map, shadowInf, _heightsOnlyRegion.x1, _heightsOnlyRegion.z1, _heightsOnlyRegion.x2, _heightsOnlyRegion.z2)) {
+        disposeGroup(cliffs)
+        cliffs = buildCliffMeshes(map)
+        scene.add(cliffs)
+        // Rebuild water meshes in-place so water appears immediately during sculpting
+        if (terrainGroup) {
+          for (const child of [...terrainGroup.children]) {
+            if (child.name === 'terrain-water' || child.name === 'terrain-surface-water') {
+              child.geometry?.dispose()
+              child.material?.dispose()
+              terrainGroup.remove(child)
+            }
+          }
+          const wg = buildWaterMeshes(map, waterTexture)
+          for (const child of wg.children) terrainGroup.add(child)
+        }
+        if (state.showSplitLines) {
+          if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
+          splitLines = buildSplitLines()
+          scene.add(splitLines)
+        }
+        if (state.showTileGrid) {
+          if (tileGrid) { tileGrid.geometry?.dispose(); tileGrid.material?.dispose(); scene.remove(tileGrid) }
+          tileGrid = buildTileGrid()
+          scene.add(tileGrid)
+        }
+        applyLayerVisibility()
+        return
+      }
+      // Partial update not available (e.g. map size changed) — fall through to full rebuild.
+    }
+
+    disposeGroup(terrainGroup)
+    disposeGroup(cliffs)
+    if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
+    if (tileGrid)   { tileGrid.geometry?.dispose();   tileGrid.material?.dispose();   scene.remove(tileGrid) }
     if (!skipTextureOverlays && textureOverlayGroup) scene.remove(textureOverlayGroup)
     if (!skipTexturePlanes && texturePlaneGroup) scene.remove(texturePlaneGroup)
 
@@ -1504,7 +1666,15 @@ let brushRadius = 3.2
 
     const terrainHits = raycaster.intersectObjects(getTerrainMeshes(), false)
 
-    const eligible = placedGroup.children.filter(o => o.visible && !excludeObjects.includes(o))
+    // Pre-filter placed objects to those near the terrain hit point (or all if no terrain hit)
+    let eligible
+    if (terrainHits.length) {
+      const hp = terrainHits[0].point
+      const nearby = _spatialNearby(hp.x, hp.z, 24)
+      eligible = [...nearby].filter(o => o.visible && !excludeObjects.includes(o))
+    } else {
+      eligible = placedGroup.children.filter(o => o.visible && !excludeObjects.includes(o))
+    }
     const placedHits = raycaster.intersectObjects(eligible, true).filter(hit => {
       if (!hit.face) return false
       hit.object.getWorldQuaternion(_surfaceQuat)
@@ -1584,7 +1754,14 @@ let brushRadius = 3.2
     map.texturePlanes.push(clone)
   }
 
-  // import placed objects
+  // import placed objects — pre-load unique models in parallel first
+  const _mergeUniquePaths = [...new Set(
+    (data.placedObjects || [])
+      .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
+      .filter(Boolean)
+  )]
+  await Promise.all(_mergeUniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+
   for (const placed of data.placedObjects || []) {
     const asset = assetRegistry.find((a) => a.id === placed.assetId)
     if (!asset) continue
@@ -1607,7 +1784,7 @@ let brushRadius = 3.2
     addPlacedModel(model)
   }
 
-  rebuildTerrain()
+  markTerrainDirty()
   updateSelectionHelper()
   updateToolUI()
 }
@@ -1786,7 +1963,7 @@ let brushRadius = 3.2
   function snapSelectedThingNow() {
     if (selectedTexturePlane) {
       snapThingPositionToGrid(selectedTexturePlane.position, 0.5)
-      rebuildTerrain()
+      markTerrainDirty()
       updateSelectionHelper()
       updateToolUI()
       return
@@ -1845,7 +2022,8 @@ let brushRadius = 3.2
   function findObjectTopAt(worldX, worldZ, excludeObjects = []) {
     const MARGIN = 0.4
     let bestTop = null
-    for (const obj of placedGroup.children) {
+    const candidates = _spatialNearby(worldX, worldZ, SPATIAL_CELL * 2)
+    for (const obj of candidates) {
       if (excludeObjects.includes(obj)) continue
       if (!obj.visible) continue
 
@@ -1946,7 +2124,7 @@ let brushRadius = 3.2
       selectedTexturePlane.rotation.x = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.x)
       selectedTexturePlane.rotation.y = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.y)
       selectedTexturePlane.rotation.z = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.z)
-      rebuildTerrain()
+      markTerrainDirty()
     }
 
     if (selectedPlacedObject) {
@@ -1982,7 +2160,7 @@ function applyGaussianBrush(centerX, centerZ, delta, radius, sigma) {
 }
 
 // Laplacian smooth — blends each vertex toward the average of its neighbours
-function applySmoothBrush(centerX, centerZ) {
+function applySmoothBrush(centerX, centerZ, strength = 0.55) {
   const radius = brushRadius
   const sigma = radius * 0.47
 
@@ -2015,7 +2193,7 @@ function applySmoothBrush(centerX, centerZ) {
       if (weight < 0.005) continue
       const current = map.getVertexHeight(vx, vz)
       const target = targets.get(`${vx},${vz}`)
-      map.setVertexHeight(vx, vz, current + (target - current) * weight * 0.55)
+      map.setVertexHeight(vx, vz, current + (target - current) * weight * strength)
     }
   }
 }
@@ -2034,6 +2212,13 @@ function applyToolAtTile(tile, eventLike = null) {
   if (state.tool === ToolMode.TERRAIN) {
     captureStrokeHistoryOnce()
 
+    if (state.smoothMode) {
+      applySmoothBrush(tile.x + 0.5, tile.z + 0.5, 0.3)
+      const _r = Math.ceil(brushRadius)
+      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: tile.x - _r, z1: tile.z - _r, x2: tile.x + _r, z2: tile.z + _r } })
+      return
+    }
+
     if (state.levelMode) {
       if (state.levelHeight === null) {
         state.levelHeight = map.getAverageTileHeight(tile.x, tile.z)
@@ -2041,7 +2226,7 @@ function applyToolAtTile(tile, eventLike = null) {
       }
 
       map.flattenTileToHeight(tile.x, tile.z, state.levelHeight)
-      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: tile.x, z1: tile.z, x2: tile.x, z2: tile.z } })
       return
     }
 
@@ -2064,7 +2249,8 @@ function applyToolAtTile(tile, eventLike = null) {
       applyGaussianBrush(tile.x + 0.5, tile.z + 0.5, 0.20)
     }
 
-    rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+    const _r = Math.ceil(brushRadius)
+    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: tile.x - _r, z1: tile.z - _r, x2: tile.x + _r, z2: tile.z + _r } })
     return
   }
 
@@ -2077,7 +2263,7 @@ function applyToolAtTile(tile, eventLike = null) {
       } else {
         map.paintWaterSurface(tile.x, tile.z)
       }
-      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
       return
     }
 
@@ -2105,7 +2291,7 @@ function applyToolAtTile(tile, eventLike = null) {
         if (isErase) map.clearTextureTile(tile.x, tile.z)
         else map.paintTextureTile(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale, textureWorldUV)
       }
-      rebuildTerrain({ skipTexturePlanes: true, skipShadows: true })
+      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true })
       return
     }
 
@@ -2123,7 +2309,7 @@ function applyToolAtTile(tile, eventLike = null) {
       map.paintTile(tile.x, tile.z, state.paintType)
     }
 
-    rebuildTerrain({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
     return
   }
 
@@ -2248,7 +2434,7 @@ function applyToolAtTile(tile, eventLike = null) {
     model.userData.type = 'asset'
     model.userData.layerId = activeLayerId
     addPlacedModel(model)
-    rebuildTerrain()
+    markTerrainDirty()
   }
 
   function replaceSelectedTexturesWith(textureId) {
@@ -2257,7 +2443,7 @@ function applyToolAtTile(tile, eventLike = null) {
     for (const plane of selectedTexturePlanes) {
       plane.textureId = textureId
     }
-    rebuildTerrain()
+    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2285,7 +2471,7 @@ function applyToolAtTile(tile, eventLike = null) {
     }
     selectedPlacedObjects = replacements
     selectedPlacedObject = replacements[replacements.length - 1] || null
-    rebuildTerrain()
+    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2327,7 +2513,7 @@ function applyToolAtTile(tile, eventLike = null) {
         selectedTexturePlanes = newPlanes
         selectedTexturePlane = newPlanes[newPlanes.length - 1]
         selectedPlacedObject = null
-        rebuildTerrain()
+        markTerrainDirty()
         updateSelectionHelper()
         updateToolUI()
         return
@@ -2346,7 +2532,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedTexturePlane = clone
       selectedTexturePlanes = [clone]
       selectedPlacedObject = null
-      rebuildTerrain()
+      markTerrainDirty()
       updateSelectionHelper()
       updateToolUI()
       return
@@ -2400,7 +2586,7 @@ function applyToolAtTile(tile, eventLike = null) {
         selectedPlacedObjects = [...newModels]
         selectedTexturePlane = null
       selectedTexturePlanes = []
-        rebuildTerrain()
+        markTerrainDirty()
         updateSelectionHelper()
         updateToolUI()
       }
@@ -2446,7 +2632,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedPlacedObjects = [model]
       selectedTexturePlane = null
       selectedTexturePlanes = []
-      rebuildTerrain()
+      markTerrainDirty()
       updateSelectionHelper()
       updateToolUI()
     }
@@ -2501,7 +2687,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedTexturePlane.scale = { ...transformStart.scale }
       selectedTexturePlane.width = transformStart.width
       selectedTexturePlane.height = transformStart.height
-      rebuildTerrain()
+      markTerrainDirty()
     }
 
     if (selectedPlacedObject) {
@@ -2520,6 +2706,15 @@ function applyToolAtTile(tile, eventLike = null) {
         }
       }
 
+      // Re-register moved objects at their restored positions
+      if (transformMode === 'move') {
+        for (const obj of selectedPlacedObjects) {
+          _spatialUnregister(obj)
+          _spatialRegister(obj)
+        }
+        invalidateShadowCache()
+      }
+
       updateSelectionHelper()
     }
 
@@ -2532,6 +2727,14 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   function confirmTransform() {
+    if (transformMode === 'move') {
+      for (const obj of selectedPlacedObjects) {
+        _spatialUnregister(obj)
+        _spatialRegister(obj)
+      }
+      invalidateShadowCache()
+    }
+
     if (transformMode === 'rotate') {
       applyRotationSnapOnConfirm()
       lastRotateAxis = transformAxis
@@ -2939,9 +3142,16 @@ function applyToolAtTile(tile, eventLike = null) {
     setTool(ToolMode.TEXTURE_PLANE)
   })
 
+  smoothModeBtn.addEventListener('click', () => {
+    state.smoothMode = !state.smoothMode
+    if (state.smoothMode) { state.levelMode = false; state.levelHeight = null }
+    updateToolUI()
+  })
+
   levelModeBtn.addEventListener('click', () => {
     state.levelMode = !state.levelMode
     state.levelHeight = null
+    if (state.levelMode) state.smoothMode = false
     updateToolUI()
   })
 
@@ -2952,6 +3162,7 @@ function applyToolAtTile(tile, eventLike = null) {
     brushRadius = parseFloat(e.target.value)
     brushSizeLabel.textContent = brushRadius.toFixed(1)
   })
+
 
   const levelHeightRow = sidebar.querySelector('#levelHeightRow')
   const levelHeightInput = sidebar.querySelector('#levelHeightInput')
@@ -3127,7 +3338,7 @@ function applyToolAtTile(tile, eventLike = null) {
     transformLift = 0
     movePlaneStart = null
 
-    rebuildTerrain()
+    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   })
@@ -3199,7 +3410,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
   rotateTextureBtn.addEventListener('click', () => {
     textureRotation = (textureRotation + 1) % 4
-    rebuildTerrain()
+    markTerrainDirty()
     updateToolUI()
   })
 
@@ -3209,11 +3420,11 @@ function applyToolAtTile(tile, eventLike = null) {
     if (textureScaleVal) textureScaleVal.textContent = textureScale
     if (selectedTexturePlane) {
       selectedTexturePlane.uvRepeat = textureScale
-      rebuildTerrain()
+      markTerrainDirty()
     }
   })
 
-  renderer.domElement.addEventListener('mousemove', async (event) => {
+  renderer.domElement.addEventListener('mousemove', (event) => {
     const tile = pickTile(event)
     if (!tile) return
 
@@ -3236,7 +3447,7 @@ function applyToolAtTile(tile, eventLike = null) {
     }
     updateHoverEdgeHelper()
 
-    const terrainPoint = pickTerrainPoint(event)
+    const terrainPoint = transformMode === 'move' ? pickTerrainPoint(event) : null
 
     if (transformMode === 'move' && selectedTexturePlane) {
       // For vertical planes, fall back to a virtual horizontal plane at the plane's current Y
@@ -3470,7 +3681,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
     if (transformMode) {
       confirmTransform()
-      rebuildTerrain()
+      markTerrainDirty()
       updateSelectionHelper()
       return
     }
@@ -3496,7 +3707,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       plane.uvRepeat = textureScale
       selectedTexturePlane = plane
       selectedPlacedObject = null
-      rebuildTerrain()
+      markTerrainDirty()
       updateSelectionHelper()
       updateToolUI()
       return
@@ -3529,7 +3740,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       state.historyCapturedThisStroke = false
 
       if (wasPainting && paintingTool) {
-        rebuildTerrain({ skipTexturePlanes: true, skipShadows: true })
+        markTerrainDirty({ skipTexturePlanes: true, skipShadows: true })
       }
 
       if (isDragSelecting && dragSelectStart) {
@@ -3721,7 +3932,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
           selectedTexturePlane.scale.z = Math.max(0.1, selectedTexturePlane.scale.z + delta)
         }
 
-        rebuildTerrain()
+        markTerrainDirty()
         return
       }
 
@@ -3779,7 +3990,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         map.texturePlanes = map.texturePlanes.filter((p) => p.id !== selectedTexturePlane.id)
         selectedTexturePlane = null
       selectedTexturePlanes = []
-        rebuildTerrain()
+        markTerrainDirty()
         updateSelectionHelper()
         updateToolUI()
         return
@@ -3790,7 +4001,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         for (const obj of selectedPlacedObjects) removePlacedModel(obj)
         selectedPlacedObject = null
         selectedPlacedObjects = []
-        rebuildTerrain()
+        markTerrainDirty()
         updateSelectionHelper()
         updateToolUI()
         return
@@ -3838,7 +4049,8 @@ if (key === 'q') {
   } else {
     applyGaussianBrush(x + 0.5, z + 0.5, 0.18)
   }
-  rebuildTerrain({ skipTexturePlanes: true, skipShadows: true })
+  const _qr = Math.ceil(brushRadius)
+  markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: x - _qr, z1: z - _qr, x2: x + _qr, z2: z + _qr } })
   return
 }
 
@@ -3852,7 +4064,8 @@ if (key === 'e') {
   } else {
     applyGaussianBrush(x + 0.5, z + 0.5, -0.18)
   }
-  rebuildTerrain({ skipTexturePlanes: true, skipShadows: true })
+  const _er = Math.ceil(brushRadius)
+  markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: x - _er, z1: z - _er, x2: x + _er, z2: z + _er } })
   return
 }
 
@@ -3864,7 +4077,7 @@ if (key === 'e') {
     if (key === 'f') {
       pushUndoState()
       map.flipTileSplit(x, z)
-      rebuildTerrain()
+      markTerrainDirty()
       return
     }
 
@@ -3945,7 +4158,7 @@ if (key === 'e') {
 
       if (state.tool === ToolMode.TEXTURE_PLANE || (state.tool === ToolMode.PAINT && paintTabTextureId && paintTabTextureId !== '__erase__')) {
         textureRotation = (textureRotation + 1) % 4
-        rebuildTerrain()
+        markTerrainDirty()
         updateToolUI()
         return
       }
@@ -4045,7 +4258,7 @@ if (key === 'e') {
       selectedTextureId = filteredTextures[0]?.id || null
       refreshTexturePalette()
       refreshPaintTexturePalette()
-      rebuildTerrain()
+      markTerrainDirty()
       updateToolUI()
     } catch (err) {
       console.error('initTextures failed:', err)
@@ -4059,7 +4272,7 @@ if (key === 'e') {
     }
   }
 
-  rebuildTerrain()
+  markTerrainDirty()
   buildGroundSwatches()
   refreshLayersPanel()
   updateToolUI()
@@ -4084,6 +4297,12 @@ if (key === 'e') {
 
   function animate() {
     requestAnimationFrame(animate)
+    if (_terrainDirty) {
+      rebuildTerrain({ ..._terrainDirtyOpts, _heightsOnlyRegion: _terrainDirtyRegion })
+      _terrainDirty = false
+      _terrainDirtyRegion = null
+      _terrainDirtyOpts = { skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true }
+    }
     if (Array.isArray(selectionHelper)) {
       for (const h of selectionHelper) h.update()
     } else if (selectionHelper) {
