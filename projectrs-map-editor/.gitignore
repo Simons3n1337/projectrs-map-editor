@@ -22,3 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+public/assets/forced textures/*.zip
+public/assets/forced textures/*.sbsar
