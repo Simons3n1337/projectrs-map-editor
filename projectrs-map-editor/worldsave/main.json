@@ -9,7 +9,7 @@
     },
     "waterLevel": -2.5,
     "chunkWaterLevels": {},
-    "selectedTexturePlaneId": null,
+    "selectedTexturePlaneId": "plane_1774408148950_24987",
     "texturePlanes": [
       {
         "id": "plane_1773842714636_26435",
@@ -8358,6 +8358,102 @@
           "x": 1,
           "y": 1,
           "z": 1
+        },
+        "uvRepeat": 1
+      },
+      {
+        "id": "plane_1774408053331_10972",
+        "textureId": "tex65",
+        "width": 1,
+        "height": 0.7,
+        "vertical": true,
+        "doubleSided": true,
+        "position": {
+          "x": 15.846429265596234,
+          "y": 1.2731315052615486,
+          "z": 21.186437279516568
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 1.5707963267948966
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 0.3999999999999999
+        },
+        "uvRepeat": 1
+      },
+      {
+        "id": "plane_1774408083887_93802",
+        "textureId": "tex65",
+        "width": 1,
+        "height": 0.7,
+        "vertical": true,
+        "doubleSided": true,
+        "position": {
+          "x": 8,
+          "y": 1.2731315052615486,
+          "z": 23
+        },
+        "rotation": {
+          "x": 0,
+          "y": 1.5707963267948966,
+          "z": 1.5707963267948966
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 0.3999999999999999
+        },
+        "uvRepeat": 1
+      },
+      {
+        "id": "plane_1774408121347_79238",
+        "textureId": "tex65",
+        "width": 1,
+        "height": 0.7,
+        "vertical": true,
+        "doubleSided": true,
+        "position": {
+          "x": 23.995241255265576,
+          "y": 3.0731315052615487,
+          "z": 19.121489911270253
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 1.5707963267948966
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 0.3999999999999999
+        },
+        "uvRepeat": 1
+      },
+      {
+        "id": "plane_1774408148950_24987",
+        "textureId": "tex65",
+        "width": 1,
+        "height": 0.7,
+        "vertical": true,
+        "doubleSided": true,
+        "position": {
+          "x": 22.92180819193269,
+          "y": 3.0731315052615487,
+          "z": 17.930039386529124
+        },
+        "rotation": {
+          "x": 0,
+          "y": -1.5707963267948966,
+          "z": 1.5707963267948966
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 0.3999999999999999
         },
         "uvRepeat": 1
       }

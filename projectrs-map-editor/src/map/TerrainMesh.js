@@ -985,7 +985,7 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
 
     texture.wrapS = THREE.RepeatWrapping
     texture.wrapT = THREE.RepeatWrapping
-    texture.repeat.set(actualW / scale, actualH / scale)
+    texture.repeat.set(scale, scale)
     texture.offset.set(0, 0)
     texture.colorSpace = THREE.SRGBColorSpace
     if (texture.image) texture.needsUpdate = true

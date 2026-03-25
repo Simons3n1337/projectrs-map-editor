@@ -3887,15 +3887,19 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (transformMode === 'rotate') {
       e.preventDefault()
 
-      const axis = transformAxis === 'all' ? 'y' : transformAxis
+      // Translate unified axis convention → Three.js axis
+      // X=east-west(X), Y=north-south(Z), Z=vertical(Y), all=vertical(Y)
+      const threeAxis = (transformAxis === 'height' || transformAxis === 'all') ? 'y'
+        : transformAxis === 'ground-z' ? 'z'
+        : 'x'
 
       if (selectedTexturePlane) {
         if (e.shiftKey) {
-          selectedTexturePlane.rotation[axis] += (e.deltaY > 0 ? 1 : -1) * 0.1
+          selectedTexturePlane.rotation[threeAxis] += (e.deltaY > 0 ? 1 : -1) * 0.1
         } else {
           const step = Math.PI / 12
-          selectedTexturePlane.rotation[axis] += e.deltaY > 0 ? step : -step
-          selectedTexturePlane.rotation[axis] = snapAngleToQuarterIfClose(selectedTexturePlane.rotation[axis], 0.08)
+          selectedTexturePlane.rotation[threeAxis] += e.deltaY > 0 ? step : -step
+          selectedTexturePlane.rotation[threeAxis] = snapAngleToQuarterIfClose(selectedTexturePlane.rotation[threeAxis], 0.08)
         }
 
         updateTexturePlaneMeshTransform(selectedTexturePlane)
@@ -3907,13 +3911,13 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         const delta = e.shiftKey ? (e.deltaY > 0 ? 1 : -1) * 0.1 : (e.deltaY > 0 ? 1 : -1) * (Math.PI / 12)
 
         const applyRotation = (obj) => {
-          if (axis === 'y') {
-            // Y-axis (vertical spin): Euler is fine, no gimbal issue, snap supported
+          if (threeAxis === 'y') {
+            // Vertical spin: Euler is fine, no gimbal issue, snap supported
             obj.rotation.y += delta
             if (!e.shiftKey) obj.rotation.y = snapAngleToQuarterIfClose(obj.rotation.y, 0.08)
           } else {
             // X/Z: rotate around absolute world axis to avoid gimbal lock from GLTF baked rotations
-            const worldAxis = axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
+            const worldAxis = threeAxis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)
             obj.rotateOnWorldAxis(worldAxis, delta)
           }
         }
@@ -3937,13 +3941,13 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
       if (selectedTexturePlane) {
         if (transformAxis === 'all') {
-          selectedTexturePlane.width = Math.max(0.1, selectedTexturePlane.width + delta)
+          selectedTexturePlane.width  = Math.max(0.1, selectedTexturePlane.width  + delta)
           selectedTexturePlane.height = Math.max(0.1, selectedTexturePlane.height + delta)
         } else if (transformAxis === 'x') {
-          selectedTexturePlane.width = Math.max(0.1, selectedTexturePlane.width + delta)
-        } else if (transformAxis === 'y') {
+          selectedTexturePlane.width  = Math.max(0.1, selectedTexturePlane.width  + delta)
+        } else if (transformAxis === 'height') {   // Z key = vertical = plane height
           selectedTexturePlane.height = Math.max(0.1, selectedTexturePlane.height + delta)
-        } else if (transformAxis === 'z') {
+        } else if (transformAxis === 'ground-z') { // Y key = depth scale
           selectedTexturePlane.scale.z = Math.max(0.1, selectedTexturePlane.scale.z + delta)
         }
 
@@ -3952,15 +3956,17 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       }
 
       if (selectedPlacedObject) {
+        // Translate unified axis → Three.js scale axis
+        const scaleAxis = transformAxis === 'height' ? 'y' : transformAxis === 'ground-z' ? 'z' : transformAxis
         if (transformAxis === 'all') {
           const nextX = Math.max(0.1, selectedPlacedObject.scale.x + delta)
           const nextY = Math.max(0.1, selectedPlacedObject.scale.y + delta)
           const nextZ = Math.max(0.1, selectedPlacedObject.scale.z + delta)
           selectedPlacedObject.scale.set(nextX, nextY, nextZ)
         } else {
-          selectedPlacedObject.scale[transformAxis] = Math.max(
+          selectedPlacedObject.scale[scaleAxis] = Math.max(
             0.1,
-            selectedPlacedObject.scale[transformAxis] + delta
+            selectedPlacedObject.scale[scaleAxis] + delta
           )
         }
 
@@ -4109,18 +4115,11 @@ if (key === 'e') {
     }
 
     if (key === 'x' || key === 'y' || key === 'z') {
-      if (transformMode === 'move') {
-        if (key === 'x') transformAxis = 'x'
-        else if (key === 'y') transformAxis = 'ground-z'
-        else if (key === 'z') transformAxis = 'height'
-      } else if (transformMode === 'scale') {
-        // Z = up (world Y), Y = depth (world Z), X = X — matches move convention
-        if (key === 'x') transformAxis = 'x'
-        else if (key === 'y') transformAxis = 'z'
-        else if (key === 'z') transformAxis = 'y'
-      } else {
-        transformAxis = key
-      }
+      // Consistent convention across all modes:
+      // X = east-west, Y = north-south (Three.js Z), Z = vertical (Three.js Y)
+      if (key === 'x') transformAxis = 'x'
+      else if (key === 'y') transformAxis = 'ground-z'
+      else if (key === 'z') transformAxis = 'height'
 
       updateToolUI()
       return
