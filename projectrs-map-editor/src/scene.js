@@ -1621,6 +1621,7 @@ let brushRadius = 3.2
     mesh.position.set(plane.position.x, plane.position.y, plane.position.z)
     mesh.rotation.set(plane.rotation?.x ?? 0, plane.rotation?.y ?? 0, plane.rotation?.z ?? 0)
     mesh.scale.set(plane.scale?.x ?? 1, plane.scale?.y ?? 1, plane.scale?.z ?? 1)
+
   }
 
   function updateMouse(event) {
@@ -2444,7 +2445,7 @@ function applyToolAtTile(tile, eventLike = null) {
     model.userData.type = 'asset'
     model.userData.layerId = activeLayerId
     addPlacedModel(model)
-    markTerrainDirty()
+    markTerrainDirty({ skipTexturePlanes: true })
   }
 
   function replaceSelectedTexturesWith(textureId) {
@@ -3695,7 +3696,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
     if (transformMode) {
       confirmTransform()
-      markTerrainDirty()
+      markTerrainDirty({ skipTexturePlanes: !selectedTexturePlane })
       updateSelectionHelper()
       return
     }
@@ -4259,13 +4260,18 @@ if (key === 'e') {
       filteredTextures = [...textureRegistry].sort((a, b) => a.name.localeCompare(b.name))
 
       for (const tex of textureRegistry) {
-        const loadedTexture = textureLoader.load(tex.path)
+        const loadedTexture = await new Promise((resolve, reject) => {
+          textureLoader.load(tex.path, resolve, undefined, reject)
+        })
         loadedTexture.wrapS = THREE.ClampToEdgeWrapping
         loadedTexture.wrapT = THREE.ClampToEdgeWrapping
         textureCache.set(tex.id, loadedTexture)
 
-        const meta = await loadImageMeta(tex.path)
-        textureMeta.set(tex.id, meta)
+        const img = loadedTexture.image
+        textureMeta.set(tex.id, {
+          width:  img?.naturalWidth  || img?.width  || 64,
+          height: img?.naturalHeight || img?.height || 64
+        })
       }
 
       selectedTextureId = filteredTextures[0]?.id || null

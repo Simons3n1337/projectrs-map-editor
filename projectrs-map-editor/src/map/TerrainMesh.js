@@ -983,19 +983,10 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     const pz = plane.position?.z ?? 0
     const ry = plane.rotation?.y ?? 0
 
-    // World-space UV: project plane's bottom-left corner onto its own axes
-    // so adjacent planes share UV values at their edges (seamless tiling)
-    const rightX = Math.cos(ry)
-    const rightZ = -Math.sin(ry)
-    const leftEdgeX = px - (actualW / 2) * rightX
-    const leftEdgeZ = pz - (actualW / 2) * rightZ
-    const uWorld = leftEdgeX * rightX + leftEdgeZ * rightZ
-    const vWorld = py - actualH / 2
-
     texture.wrapS = THREE.RepeatWrapping
     texture.wrapT = THREE.RepeatWrapping
     texture.repeat.set(actualW / scale, actualH / scale)
-    texture.offset.set(((uWorld / scale) % 1 + 1) % 1, ((vWorld / scale) % 1 + 1) % 1)
+    texture.offset.set(0, 0)
     texture.colorSpace = THREE.SRGBColorSpace
     if (texture.image) texture.needsUpdate = true
 
