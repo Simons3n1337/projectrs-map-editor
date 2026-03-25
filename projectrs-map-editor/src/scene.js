@@ -42,6 +42,7 @@ function tuneModelLighting(model, assetPath = '') {
   const isModular = pathLower.includes('modular assets')
   const isWoodModular = pathLower.includes('wood modular')
   const isWhiteModular = pathLower.includes('white')
+  const isRock = pathLower.includes('rock')
 
   // ── Brightness scalar for "white" named modular assets ──────────────────
   // White pieces are MeshBasicMaterial (unlit) so their colour renders at
@@ -96,9 +97,10 @@ function tuneModelLighting(model, assetPath = '') {
           depthWrite: true
         })
       } else {
+        const brightness = isRock ? 0.60 : 1.0
         mat = new THREE.MeshBasicMaterial({
           map: src.map || null,
-          color: src.map ? 0xffffff : (src.color ? src.color.clone() : 0xffffff),
+          color: src.map ? new THREE.Color(brightness, brightness, brightness) : (src.color ? src.color.clone().multiplyScalar(brightness) : new THREE.Color(brightness, brightness, brightness)),
           alphaMap: src.alphaMap || null,
           alphaTest,
           side: THREE.DoubleSide,
@@ -140,7 +142,7 @@ function tuneModelLighting(model, assetPath = '') {
   waterTexture.wrapS = THREE.RepeatWrapping
   waterTexture.wrapT = THREE.RepeatWrapping
 
-  const clock = new THREE.Clock()
+  const clock = new THREE.Timer()
   const mixers = new Map()  // model -> AnimationMixer
 
   function setupModelAnimations(model, path) {
@@ -1403,23 +1405,21 @@ let brushRadius = 3.2
   function buildSplitLines() {
     const points = []
 
-    if (state.showSplitLines) {
-      for (let z = 0; z < map.height; z++) {
-        for (let x = 0; x < map.width; x++) {
-          const tile = map.getTile(x, z)
-          const h = map.getTileCornerHeights(x, z)
+    for (let z = 0; z < map.height; z++) {
+      for (let x = 0; x < map.width; x++) {
+        const tile = map.getTile(x, z)
+        const h = map.getTileCornerHeights(x, z)
 
-          if (tile.split === 'forward') {
-            points.push(
-              new THREE.Vector3(x, h.tl + 0.03, z),
-              new THREE.Vector3(x + 1, h.br + 0.03, z + 1)
-            )
-          } else {
-            points.push(
-              new THREE.Vector3(x + 1, h.tr + 0.03, z),
-              new THREE.Vector3(x, h.bl + 0.03, z + 1)
-            )
-          }
+        if (tile.split === 'forward') {
+          points.push(
+            new THREE.Vector3(x, h.tl + 0.03, z),
+            new THREE.Vector3(x + 1, h.br + 0.03, z + 1)
+          )
+        } else {
+          points.push(
+            new THREE.Vector3(x + 1, h.tr + 0.03, z),
+            new THREE.Vector3(x, h.bl + 0.03, z + 1)
+          )
         }
       }
     }
@@ -1440,7 +1440,7 @@ let brushRadius = 3.2
     const points = []
     const LIFT = 0.04
 
-    if (state.showTileGrid) for (let z = 0; z < map.height; z++) {
+    for (let z = 0; z < map.height; z++) {
       for (let x = 0; x < map.width; x++) {
         const h = map.getTileCornerHeights(x, z)
 
@@ -1560,7 +1560,7 @@ let brushRadius = 3.2
             }
           }
           const wg = buildWaterMeshes(map, waterTexture)
-          for (const child of wg.children) terrainGroup.add(child)
+          for (const child of [...wg.children]) terrainGroup.add(child)
         }
         if (state.showSplitLines) {
           if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
@@ -2426,7 +2426,17 @@ function applyToolAtTile(tile, eventLike = null) {
     }
     if (event) {
       const sp = pickSurfacePoint(event)
-      if (sp) pos.y = sp.y
+      if (sp) {
+        pos.y = sp.y
+        if (asset.path?.toLowerCase().includes('tree')) {
+          pos.x = Math.round(sp.x)
+          pos.z = Math.round(sp.z)
+        }
+      }
+    }
+    if (asset.path?.toLowerCase().includes('tree')) {
+      pos.x = Math.round(pos.x)
+      pos.z = Math.round(pos.z)
     }
     model.position.copy(pos)
     model.rotation.y = previewRotation
@@ -3443,6 +3453,10 @@ function applyToolAtTile(tile, eventLike = null) {
         const snap = getWallEdgeSnap(tile)
         if (snap) { pos.x = snap.x; pos.z = snap.z }
       }
+      if (_prevAsset?.path?.toLowerCase().includes('tree')) {
+        if (sp) { pos.x = Math.round(sp.x); pos.z = Math.round(sp.z) }
+        else { pos.x = Math.round(tile.x + 0.5); pos.z = Math.round(tile.z + 0.5) }
+      }
       previewObject.position.copy(pos)
     }
     updateHoverEdgeHelper()
@@ -3740,7 +3754,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       state.historyCapturedThisStroke = false
 
       if (wasPainting && paintingTool) {
-        markTerrainDirty({ skipTexturePlanes: true, skipShadows: true })
+        markTerrainDirty({ skipTexturePlanes: true, skipShadows: false })
       }
 
       if (isDragSelecting && dragSelectStart) {
@@ -4248,7 +4262,6 @@ if (key === 'e') {
         const loadedTexture = textureLoader.load(tex.path)
         loadedTexture.wrapS = THREE.ClampToEdgeWrapping
         loadedTexture.wrapT = THREE.ClampToEdgeWrapping
-        loadedTexture.needsUpdate = true
         textureCache.set(tex.id, loadedTexture)
 
         const meta = await loadImageMeta(tex.path)
@@ -4308,6 +4321,7 @@ if (key === 'e') {
     } else if (selectionHelper) {
       selectionHelper.update()
     }
+    clock.update()
     const delta = clock.getDelta()
     for (const mixer of mixers.values()) mixer.update(delta)
     const t = performance.now() * 0.0003

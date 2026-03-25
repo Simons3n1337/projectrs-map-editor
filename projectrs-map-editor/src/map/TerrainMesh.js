@@ -560,11 +560,12 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     let swTexture = null
     if (waterTexture) {
       swTexture = waterTexture.clone()
+      swTexture.image = waterTexture.image
       swTexture.wrapS = THREE.RepeatWrapping
       swTexture.wrapT = THREE.RepeatWrapping
       swTexture.colorSpace = THREE.SRGBColorSpace
       swTexture.offset.set(0, 0)
-      swTexture.needsUpdate = true
+      if (swTexture.image) swTexture.needsUpdate = true
     }
 
     const swMaterial = new THREE.MeshLambertMaterial({
@@ -674,10 +675,11 @@ export function buildWaterMeshes(map, waterTexture) {
     let swTex = null
     if (waterTexture) {
       swTex = waterTexture.clone()
+      swTex.image = waterTexture.image
       swTex.wrapS = THREE.RepeatWrapping
       swTex.wrapT = THREE.RepeatWrapping
       swTex.colorSpace = THREE.SRGBColorSpace
-      swTex.needsUpdate = true
+      if (swTex.image) swTex.needsUpdate = true
     }
     const mat = new THREE.MeshLambertMaterial({
       map: swTex || null,
@@ -966,6 +968,7 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     if (!textureSrc) continue
 
     const texture = textureSrc.clone()
+    texture.image = textureSrc.image
     const scale = plane.uvRepeat || 1
 
     const sx = plane.scale?.x ?? 1
@@ -994,7 +997,7 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     texture.repeat.set(actualW / scale, actualH / scale)
     texture.offset.set(((uWorld / scale) % 1 + 1) % 1, ((vWorld / scale) % 1 + 1) % 1)
     texture.colorSpace = THREE.SRGBColorSpace
-    texture.needsUpdate = true
+    if (texture.image) texture.needsUpdate = true
 
     const geometry = new THREE.PlaneGeometry(width, height)
     const isSelected = map.selectedTexturePlaneId === plane.id
