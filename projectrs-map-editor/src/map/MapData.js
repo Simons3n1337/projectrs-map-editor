@@ -41,6 +41,31 @@ export class MapData {
       }
       this.heights.push(row)
     }
+
+    this.passable = []
+    for (let z = 0; z < height; z++) {
+      const row = []
+      for (let x = 0; x < width; x++) row.push(true)
+      this.passable.push(row)
+    }
+
+    // EW edges: blockedEdgesEW[z][x] blocks movement between tile (x-1,z) and tile (x,z)
+    // x ranges 0..width (width+1 values), z ranges 0..height-1
+    this.blockedEdgesEW = []
+    for (let z = 0; z < height; z++) {
+      const row = []
+      for (let x = 0; x <= width; x++) row.push(false)
+      this.blockedEdgesEW.push(row)
+    }
+
+    // NS edges: blockedEdgesNS[z][x] blocks movement between tile (x,z-1) and tile (x,z)
+    // z ranges 0..height (height+1 values), x ranges 0..width-1
+    this.blockedEdgesNS = []
+    for (let z = 0; z <= height; z++) {
+      const row = []
+      for (let x = 0; x < width; x++) row.push(false)
+      this.blockedEdgesNS.push(row)
+    }
   }
 
   getTile(x, z) {
@@ -277,6 +302,36 @@ export class MapData {
     tile.textureScaleB = 1
   }
 
+  isTilePassable(x, z) {
+    if (x < 0 || z < 0 || x >= this.width || z >= this.height) return false
+    return this.passable[z][x] !== false
+  }
+
+  setTilePassable(x, z, value) {
+    if (x < 0 || z < 0 || x >= this.width || z >= this.height) return
+    this.passable[z][x] = value
+  }
+
+  isEdgeBlockedEW(x, z) {
+    if (x < 0 || x > this.width || z < 0 || z >= this.height) return false
+    return this.blockedEdgesEW[z][x] === true
+  }
+
+  setEdgeBlockedEW(x, z, value) {
+    if (x < 0 || x > this.width || z < 0 || z >= this.height) return
+    this.blockedEdgesEW[z][x] = value
+  }
+
+  isEdgeBlockedNS(x, z) {
+    if (x < 0 || x >= this.width || z < 0 || z > this.height) return false
+    return this.blockedEdgesNS[z][x] === true
+  }
+
+  setEdgeBlockedNS(x, z, value) {
+    if (x < 0 || x >= this.width || z < 0 || z > this.height) return
+    this.blockedEdgesNS[z][x] = value
+  }
+
   flipTileSplit(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
@@ -312,9 +367,24 @@ export class MapData {
     next.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes))
     next.selectedTexturePlaneId = this.selectedTexturePlaneId
 
-    for (let z = 0; z < Math.min(this.height, newHeight); z++) {
-      for (let x = 0; x < Math.min(this.width, newWidth); x++) {
+    const minW = Math.min(this.width, newWidth)
+    const minH = Math.min(this.height, newHeight)
+
+    for (let z = 0; z < minH; z++) {
+      for (let x = 0; x < minW; x++) {
         next.tiles[z][x] = JSON.parse(JSON.stringify(this.tiles[z][x]))
+        next.passable[z][x] = this.passable[z][x]
+      }
+    }
+
+    for (let z = 0; z < minH; z++) {
+      for (let x = 0; x <= minW; x++) {
+        next.blockedEdgesEW[z][x] = this.blockedEdgesEW[z]?.[x] ?? false
+      }
+    }
+    for (let z = 0; z <= minH; z++) {
+      for (let x = 0; x < minW; x++) {
+        next.blockedEdgesNS[z][x] = this.blockedEdgesNS[z]?.[x] ?? false
       }
     }
 
@@ -338,7 +408,10 @@ export class MapData {
       selectedTexturePlaneId: this.selectedTexturePlaneId,
       texturePlanes: this.texturePlanes,
       tiles: this.tiles,
-      heights: this.heights
+      heights: this.heights,
+      passable: this.passable.map(row => [...row]),
+      blockedEdgesEW: this.blockedEdgesEW.map(row => [...row]),
+      blockedEdgesNS: this.blockedEdgesNS.map(row => [...row])
     }
   }
 
@@ -380,6 +453,30 @@ export class MapData {
             waterPainted: !!src.waterPainted || src.ground === 'water',
             waterSurface: !!src.waterSurface
           }
+        }
+      }
+    }
+
+    if (Array.isArray(data.passable)) {
+      for (let z = 0; z < map.height; z++) {
+        for (let x = 0; x < map.width; x++) {
+          map.passable[z][x] = data.passable[z]?.[x] !== false
+        }
+      }
+    }
+
+    if (Array.isArray(data.blockedEdgesEW)) {
+      for (let z = 0; z < map.height; z++) {
+        for (let x = 0; x <= map.width; x++) {
+          map.blockedEdgesEW[z][x] = data.blockedEdgesEW[z]?.[x] === true
+        }
+      }
+    }
+
+    if (Array.isArray(data.blockedEdgesNS)) {
+      for (let z = 0; z <= map.height; z++) {
+        for (let x = 0; x < map.width; x++) {
+          map.blockedEdgesNS[z][x] = data.blockedEdgesNS[z]?.[x] === true
         }
       }
     }

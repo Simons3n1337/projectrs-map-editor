@@ -4,7 +4,8 @@ export const ToolMode = {
   PLACE: 'place',
   SELECT: 'select',
   TEXTURE: 'texture',
-  TEXTURE_PLANE: 'texture_plane'
+  TEXTURE_PLANE: 'texture_plane',
+  PATHFINDING: 'pathfinding'
 }
 
 export function toolLabel(mode) {
@@ -14,5 +15,6 @@ export function toolLabel(mode) {
   if (mode === ToolMode.SELECT) return 'Select'
   if (mode === ToolMode.TEXTURE) return 'Texture Paint'
   if (mode === ToolMode.TEXTURE_PLANE) return 'Texture Plane'
+  if (mode === ToolMode.PATHFINDING) return 'Pathfinding'
   return 'Unknown Tool'
 }

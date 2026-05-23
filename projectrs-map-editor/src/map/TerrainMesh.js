@@ -11,36 +11,33 @@ function sampleNoise(x, z, scaleA = 1, scaleB = 1) {
   ) * 0.5
 }
 
+const GROUND_BASE_COLORS = {
+  dirt: { r: 0.45, g: 0.31, b: 0.14 },
+  sand: { r: 0.72, g: 0.60, b: 0.24 },
+  path: { r: 0.42, g: 0.30, b: 0.13 },
+  road: { r: 0.47, g: 0.46, b: 0.43 },
+  water: { r: 0.40, g: 0.47, b: 0.66 },
+  'dungeon-floor': { r: 0.22, g: 0.17, b: 0.11 },
+  'dungeon-rock': { r: 0.28, g: 0.20, b: 0.12 },
+  grass: { r: 0.13, g: 0.43, b: 0.07 }
+}
+
+function groundBaseColor(type) {
+  return GROUND_BASE_COLORS[type] || GROUND_BASE_COLORS.grass
+}
+
 function groundColor(type, shade) {
-  if (type === 'dirt') {
-    return new THREE.Color(0.45 * shade, 0.31 * shade, 0.14 * shade)
-  }
+  const base = groundBaseColor(type)
+  return new THREE.Color(base.r * shade, base.g * shade, base.b * shade)
+}
 
-  if (type === 'sand') {
-    return new THREE.Color(0.72 * shade, 0.60 * shade, 0.24 * shade)
+function shadowAt(shadowInf, x, z) {
+  if (!shadowInf) return 1.0
+  if (shadowInf.regional) {
+    const row = shadowInf.rows[z - shadowInf.z0]
+    return row ? (row[x - shadowInf.x0] ?? 1.0) : 1.0
   }
-
-  if (type === 'path') {
-    return new THREE.Color(0.42 * shade, 0.30 * shade, 0.13 * shade)
-  }
-
-  if (type === 'road') {
-    return new THREE.Color(0.47 * shade, 0.46 * shade, 0.43 * shade)
-  }
-
-  if (type === 'water') {
-    return new THREE.Color(0.40 * shade, 0.47 * shade, 0.66 * shade)
-  }
-
-  if (type === 'dungeon-floor') {
-    return new THREE.Color(0.22 * shade, 0.17 * shade, 0.11 * shade)
-  }
-
-  if (type === 'dungeon-rock') {
-    return new THREE.Color(0.28 * shade, 0.20 * shade, 0.12 * shade)
-  }
-
-  return new THREE.Color(0.13 * shade, 0.43 * shade, 0.07 * shade)
+  return shadowInf[z]?.[x] ?? 1.0
 }
 
 function pushVertex(vertices, colors, uvs, x, y, z, color, u, v) {
@@ -194,7 +191,7 @@ function getCornerBlendedColor(map, cornerX, cornerZ, shade) {
     const type = map.getBaseGroundType(nx, nz)
     if (type === 'road') continue  // road doesn't bleed into neighbours
     const w = 1.0
-    const c = groundColor(type, 1.0)
+    const c = groundBaseColor(type)
     r += c.r * w; g += c.g * w; b += c.b * w
     noise += getNoiseExtra(type, cornerX, cornerZ) * w
     totalWeight += w
@@ -248,13 +245,13 @@ function _cvSlopeShade(map, vx, vz) {
   return _vcSlopeShade[i]
 }
 
-// --- Persistent land geometry for partial height-only updates ---
-let _landGeo = null
-let _landPosBuf = null   // Float32Array backing position attribute
-let _landColBuf = null   // Float32Array backing color attribute
-let _landTileOff = null  // Int32Array: [z * width + x] = first vertex index for this tile
-let _landMapW = 0
-let _landMapH = 0
+function normalizeTileBounds(map, bounds = null) {
+  const x1 = Math.max(0, Math.floor(bounds?.x1 ?? 0))
+  const z1 = Math.max(0, Math.floor(bounds?.z1 ?? 0))
+  const x2 = Math.min(map.width - 1, Math.floor(bounds?.x2 ?? map.width - 1))
+  const z2 = Math.min(map.height - 1, Math.floor(bounds?.z2 ?? map.height - 1))
+  return { x1, z1, x2, z2, isFull: x1 === 0 && z1 === 0 && x2 === map.width - 1 && z2 === map.height - 1 }
+}
 
 function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z, map, shadowInf) {
   const shadeTL = _cvSlopeShade(map, x,     z    )
@@ -340,10 +337,10 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
   // Object proximity shadow — darken terrain near placed assets (RS2 style)
   const shadowableType = tileType === 'grass' || tileType === 'dirt' || tileType === 'path'
   if (shadowableType && shadowInf) {
-    cTL.multiplyScalar(shadowInf[z    ][x    ])
-    cTR.multiplyScalar(shadowInf[z    ][x + 1])
-    cBL.multiplyScalar(shadowInf[z + 1][x    ])
-    cBR.multiplyScalar(shadowInf[z + 1][x + 1])
+    cTL.multiplyScalar(shadowAt(shadowInf, x,     z    ))
+    cTR.multiplyScalar(shadowAt(shadowInf, x + 1, z    ))
+    cBL.multiplyScalar(shadowAt(shadowInf, x,     z + 1))
+    cBR.multiplyScalar(shadowAt(shadowInf, x + 1, z + 1))
   }
 
   if (groundBType && groundBType !== tileType) {
@@ -356,7 +353,7 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     const shadowableA = tileType === 'grass' || tileType === 'dirt' || tileType === 'path'
     const shadowableB = groundBType === 'grass' || groundBType === 'dirt' || groundBType === 'path'
     const avgShadow = shadowInf
-      ? (shadowInf[z][x] + shadowInf[z][x+1] + shadowInf[z+1][x] + shadowInf[z+1][x+1]) / 4
+      ? (shadowAt(shadowInf, x, z) + shadowAt(shadowInf, x+1, z) + shadowAt(shadowInf, x, z+1) + shadowAt(shadowInf, x+1, z+1)) / 4
       : 1.0
     cA.multiplyScalar(avgAO * (shadowableA && shadowInf ? avgShadow : 1.0))
     cB.multiplyScalar(avgAO * (shadowableB && shadowInf ? avgShadow : 1.0))
@@ -398,8 +395,9 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
   return 4
 }
 
-export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
+export function buildTerrainMeshes(map, waterTexture, shadowInf = null, bounds = null) {
   _initVertexCache(map)
+  const b = normalizeTileBounds(map, bounds)
 
   const landVertices = []
   const landColors = []
@@ -414,11 +412,8 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
   let landBase = 0
   let waterBase = 0
 
-  const newTileOff = new Int32Array(map.width * map.height)
-
-  for (let z = 0; z < map.height; z++) {
-    for (let x = 0; x < map.width; x++) {
-      newTileOff[z * map.width + x] = landBase
+  for (let z = b.z1; z <= b.z2; z++) {
+    for (let x = b.x1; x <= b.x2; x++) {
       const h = map.getTileCornerHeights(x, z)
       const landType = map.getBaseGroundType(x, z)
 
@@ -462,8 +457,8 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
   let swBase = 0
 
   const _swColor = new THREE.Color(0.55, 0.72, 0.78)
-  for (let z = 0; z < map.height; z++) {
-    for (let x = 0; x < map.width; x++) {
+  for (let z = b.z1; z <= b.z2; z++) {
+    for (let x = b.x1; x <= b.x2; x++) {
       const tile = map.getTile(x, z)
       if (!tile?.waterSurface) continue
 
@@ -491,27 +486,23 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
   const group = new THREE.Group()
   group.name = 'terrain-group'
 
-  // Store persistent land geometry for partial height-only updates
-  _landTileOff = newTileOff
-  _landMapW    = map.width
-  _landMapH    = map.height
-  _landPosBuf  = new Float32Array(landVertices)
-  _landColBuf  = new Float32Array(landColors)
+  const landPosBuf = new Float32Array(landVertices)
+  const landColBuf = new Float32Array(landColors)
 
   if (landVertices.length > 0) {
-    _landGeo = new THREE.BufferGeometry()
-    _landGeo.setAttribute('position', new THREE.BufferAttribute(_landPosBuf, 3))
-    _landGeo.setAttribute('color',    new THREE.BufferAttribute(_landColBuf, 3))
-    _landGeo.setAttribute('uv',       new THREE.Float32BufferAttribute(landUVs, 2))
-    _landGeo.setIndex(landIndices)
-    _landGeo.computeVertexNormals()
+    const landGeo = new THREE.BufferGeometry()
+    landGeo.setAttribute('position', new THREE.BufferAttribute(landPosBuf, 3))
+    landGeo.setAttribute('color',    new THREE.BufferAttribute(landColBuf, 3))
+    landGeo.setAttribute('uv',       new THREE.Float32BufferAttribute(landUVs, 2))
+    landGeo.setIndex(landIndices)
+    landGeo.computeVertexNormals()
 
     const landMaterial = new THREE.MeshLambertMaterial({
       vertexColors: true,
       side: THREE.DoubleSide
     })
 
-    const landMesh = new THREE.Mesh(_landGeo, landMaterial)
+    const landMesh = new THREE.Mesh(landGeo, landMaterial)
     landMesh.name = 'terrain-land'
     landMesh.receiveShadow = true
     group.add(landMesh)
@@ -700,7 +691,8 @@ export function buildWaterMeshes(map, waterTexture) {
   return group
 }
 
-export function buildCliffMeshes(map) {
+export function buildCliffMeshes(map, bounds = null) {
+  const b = normalizeTileBounds(map, bounds)
   const vertices = []
   const indices = []
   const colors = []
@@ -747,8 +739,8 @@ export function buildCliffMeshes(map) {
     }
   }
 
-  for (let z = 0; z < map.height; z++) {
-    for (let x = 0; x < map.width; x++) {
+  for (let z = b.z1; z <= b.z2; z++) {
+    for (let x = b.x1; x <= b.x2; x++) {
       const h = map.getTileCornerHeights(x, z)
 
       const wLevel = map.getTileWaterLevel(x, z)
@@ -844,52 +836,16 @@ function scaledRotatedUVs(rotation, scale) {
   })
 }
 
-// Partially update the land mesh's positions and colors for tiles in the given region.
-// Only valid when tile ground types (and thus vertex counts) haven't changed — i.e. terrain-tool height edits.
-// Returns true if the update was applied, false if a full rebuild is needed instead.
-export function updateTerrainLandHeights(map, shadowInf, x1, z1, x2, z2) {
-  if (!_landGeo || !_landTileOff || _landMapW !== map.width || _landMapH !== map.height) return false
-
-  _initVertexCache(map)
-
-  // Expand region to cover neighbor-sampling ranges:
-  // getVertexWaterProximity looks 2 tiles out, getCornerBlendedColor/slopeShade look 1 tile out.
-  const margin = 3
-  const rx1 = Math.max(0, x1 - margin)
-  const rz1 = Math.max(0, z1 - margin)
-  const rx2 = Math.min(map.width - 1, x2 + margin)
-  const rz2 = Math.min(map.height - 1, z2 + margin)
-
-  const tmpV = [], tmpC = [], tmpU = [], tmpI = []
-
-  for (let z = rz1; z <= rz2; z++) {
-    for (let x = rx1; x <= rx2; x++) {
-      const off = _landTileOff[z * map.width + x]
-      const h = map.getTileCornerHeights(x, z)
-      const landType = map.getBaseGroundType(x, z)
-
-      tmpV.length = 0; tmpC.length = 0; tmpU.length = 0; tmpI.length = 0
-      const vertCount = addTileGeometry(tmpV, tmpC, tmpU, tmpI, 0, landType, h, x, z, map, shadowInf)
-
-      const base = off * 3
-      for (let i = 0; i < vertCount * 3; i++) {
-        _landPosBuf[base + i] = tmpV[i]
-        _landColBuf[base + i] = tmpC[i]
-      }
-    }
-  }
-
-  _landGeo.attributes.position.needsUpdate = true
-  _landGeo.attributes.color.needsUpdate = true
-  return true
-}
-
-export function buildTextureOverlays(map, textureRegistry, textureCache) {
+export function buildTextureOverlays(map, textureRegistry, textureCache, bounds = null) {
   const group = new THREE.Group()
   group.name = 'texture-overlays'
+  const b = normalizeTileBounds(map, bounds)
+  const textureById = textureRegistry instanceof Map
+    ? textureRegistry
+    : new Map(textureRegistry.map((textureInfo) => [textureInfo.id, textureInfo]))
 
-  for (let z = 0; z < map.height; z++) {
-    for (let x = 0; x < map.width; x++) {
+  for (let z = b.z1; z <= b.z2; z++) {
+    for (let x = b.x1; x <= b.x2; x++) {
       const tile = map.getTile(x, z)
       if (!tile || (!tile.textureId && !tile.textureIdB)) continue
       // textureHalfMode with both null means fully erased half-painted tile — skip
@@ -919,7 +875,7 @@ export function buildTextureOverlays(map, textureRegistry, textureCache) {
       }
 
       const addMesh = (textureId, rotation, scale, worldUV, indices) => {
-        const textureInfo = textureRegistry.find((t) => t.id === textureId)
+        const textureInfo = textureById.get(textureId)
         if (!textureInfo) return
         const texture = textureCache.get(textureInfo.id)
         if (!texture) return
@@ -959,9 +915,12 @@ export function buildTextureOverlays(map, textureRegistry, textureCache) {
 export function buildTexturePlanes(map, textureRegistry, textureCache) {
   const group = new THREE.Group()
   group.name = 'texture-planes'
+  const textureById = textureRegistry instanceof Map
+    ? textureRegistry
+    : new Map(textureRegistry.map((textureInfo) => [textureInfo.id, textureInfo]))
 
   for (const plane of map.texturePlanes) {
-    const textureInfo = textureRegistry.find((t) => t.id === plane.textureId)
+    const textureInfo = textureById.get(plane.textureId)
     if (!textureInfo) continue
 
     const textureSrc = textureCache.get(textureInfo.id)

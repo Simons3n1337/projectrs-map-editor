@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 const loader = new GLTFLoader()
 const cache = new Map()
 const animCache = new Map()
+const preparedCache = new Set()
 
 function buildCenteredPivotGroup(sourceScene) {
   const content = sourceScene.clone(true)
@@ -37,13 +38,25 @@ function buildCenteredPivotGroup(sourceScene) {
   return pivot
 }
 
-export async function loadAssetModel(path) {
+export async function preloadAssetModel(path) {
   if (!cache.has(path)) {
     const gltf = await loader.loadAsync(path)
     const centered = buildCenteredPivotGroup(gltf.scene)
     cache.set(path, centered)
     animCache.set(path, gltf.animations || [])
   }
+}
+
+export async function prepareAssetModel(path, prepare, key = 'default') {
+  await preloadAssetModel(path)
+  const prepareKey = `${key}:${path}`
+  if (preparedCache.has(prepareKey)) return
+  prepare(cache.get(path), path)
+  preparedCache.add(prepareKey)
+}
+
+export async function loadAssetModel(path) {
+  await preloadAssetModel(path)
 
   return cache.get(path).clone(true)
 }

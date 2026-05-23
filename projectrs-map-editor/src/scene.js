@@ -2,15 +2,13 @@ import * as THREE from 'three'
 import { MapData } from './map/MapData.js'
 import { ToolMode, toolLabel } from './editor/Tools.js'
 import { loadAssetRegistry } from './assets-system/AssetRegistry.js'
-import { loadAssetModel, makeGhostMaterial, getAssetAnimations } from './assets-system/AssetLoader.js'
+import { loadAssetModel, prepareAssetModel, makeGhostMaterial, getAssetAnimations } from './assets-system/AssetLoader.js'
 import { loadTextureRegistry } from './assets-system/TextureRegistry.js'
 import {
   buildTerrainMeshes,
   buildCliffMeshes,
-  buildWaterMeshes,
   buildTextureOverlays,
   buildTexturePlanes,
-  updateTerrainLandHeights
 } from './map/TerrainMesh.js'
 
 export function createEditorScene(container) {
@@ -37,6 +35,19 @@ scene.add(ambientGreen)
 const hemiLight = new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18)
 scene.add(hemiLight)
 
+const tunedMaterialCache = new Map()
+
+function getTunedMaterial(src, variant, makeMaterial) {
+  const key = `${variant}:${src.uuid}`
+  let mat = tunedMaterialCache.get(key)
+  if (!mat) {
+    mat = makeMaterial()
+    mat.needsUpdate = true
+    tunedMaterialCache.set(key, mat)
+  }
+  return mat
+}
+
 function tuneModelLighting(model, assetPath = '') {
   const pathLower = assetPath.toLowerCase()
   const isModular = pathLower.includes('modular assets')
@@ -61,11 +72,9 @@ function tuneModelLighting(model, assetPath = '') {
       const alphaTest = src.alphaTest ?? 0
       const isAlphaCutout = alphaTest > 0
 
-      let mat
-
       if (isWhiteModular) {
         // Flat unlit — dimmed so white pieces don't blow out in the editor
-        mat = new THREE.MeshBasicMaterial({
+        return getTunedMaterial(src, 'white-modular', () => new THREE.MeshBasicMaterial({
           map: src.map || null,
           color: src.color ? src.color.clone().multiplyScalar(WHITE_MODULAR_BRIGHTNESS) : new THREE.Color(WHITE_MODULAR_BRIGHTNESS, WHITE_MODULAR_BRIGHTNESS, WHITE_MODULAR_BRIGHTNESS),
           alphaMap: src.alphaMap || null,
@@ -73,10 +82,10 @@ function tuneModelLighting(model, assetPath = '') {
           side: THREE.DoubleSide,
           transparent: isAlphaCutout ? false : !!src.transparent,
           depthWrite: true
-        })
+        }))
       } else if (isWoodModular) {
         // Flat unlit — same as other modular, no lighting/shadows
-        mat = new THREE.MeshBasicMaterial({
+        return getTunedMaterial(src, 'wood-modular', () => new THREE.MeshBasicMaterial({
           map: src.map || null,
           color: src.color ? src.color.clone().multiplyScalar(0.34) : new THREE.Color(0.34, 0.34, 0.34),
           alphaMap: src.alphaMap || null,
@@ -84,10 +93,10 @@ function tuneModelLighting(model, assetPath = '') {
           side: THREE.DoubleSide,
           transparent: isAlphaCutout ? false : !!src.transparent,
           depthWrite: true
-        })
+        }))
       } else if (isModular) {
         // Flat unlit — consistent face colours, good for RS Classic architecture
-        mat = new THREE.MeshBasicMaterial({
+        return getTunedMaterial(src, 'modular', () => new THREE.MeshBasicMaterial({
           map: src.map || null,
           color: src.color ? src.color.clone() : 0xffffff,
           alphaMap: src.alphaMap || null,
@@ -95,10 +104,10 @@ function tuneModelLighting(model, assetPath = '') {
           side: THREE.DoubleSide,
           transparent: isAlphaCutout ? false : !!src.transparent,
           depthWrite: true
-        })
+        }))
       } else {
         const brightness = isRock ? 0.60 : 1.0
-        mat = new THREE.MeshBasicMaterial({
+        return getTunedMaterial(src, isRock ? 'rock' : 'default', () => new THREE.MeshBasicMaterial({
           map: src.map || null,
           color: src.map ? new THREE.Color(brightness, brightness, brightness) : (src.color ? src.color.clone().multiplyScalar(brightness) : new THREE.Color(brightness, brightness, brightness)),
           alphaMap: src.alphaMap || null,
@@ -106,11 +115,8 @@ function tuneModelLighting(model, assetPath = '') {
           side: THREE.DoubleSide,
           transparent: isAlphaCutout ? false : !!src.transparent,
           depthWrite: true
-        })
+        }))
       }
-
-      mat.needsUpdate = true
-      return mat
     })
 
     child.material = Array.isArray(child.material) ? tuned : tuned[0]
@@ -158,11 +164,20 @@ function tuneModelLighting(model, assetPath = '') {
     if (mixer) { mixer.stopAllAction(); mixers.delete(model) }
   }
 
-  function addPlacedModel(model) {
+  function updatePlacedModelDerivedData(model) {
+    const asset = getAssetById(model.userData.assetId)
+    const pathLower = asset?.path?.toLowerCase() || ''
+    const nameLower = asset?.name?.toLowerCase() || ''
+    model.userData._isModularAsset = pathLower.includes('modular assets')
+    model.userData._isTreeAsset = nameLower.includes('tree')
+  }
+
+  function addPlacedModel(model, { invalidateShadow = true } = {}) {
+    updatePlacedModelDerivedData(model)
     placedGroup.add(model)
     _spatialRegister(model)
-    invalidateShadowCache()
-    const asset = assetRegistry.find((a) => a.id === model.userData.assetId)
+    if (invalidateShadow) invalidateShadowCache()
+    const asset = getAssetById(model.userData.assetId)
     if (asset) setupModelAnimations(model, asset.path)
   }
 
@@ -185,6 +200,7 @@ function tuneModelLighting(model, assetPath = '') {
   scene.add(placedGroup)
 
   let assetRegistry = []
+  let assetById = new Map()
   let filteredAssets = []
   let selectedAssetId = ''
   let previewObject = null
@@ -196,6 +212,7 @@ function tuneModelLighting(model, assetPath = '') {
   let assetGroupsForCurrentSection = []
 
   let textureRegistry = []
+  let textureById = new Map()
   let filteredTextures = []
   const textureCache = new Map()
   const textureMeta = new Map()
@@ -207,6 +224,53 @@ function tuneModelLighting(model, assetPath = '') {
   let textureScale = 1
   let textureWorldUV = false
   let paintTextureScale = 1
+
+  function getAssetById(assetId) {
+    return assetById.get(assetId) || null
+  }
+
+  function getLayerById(layerId) {
+    return layers.find((l) => l.id === layerId) || null
+  }
+
+  function nextFrame() {
+    return new Promise((resolve) => requestAnimationFrame(resolve))
+  }
+
+  async function yieldIfOverBudget(workState, budgetMs = 3) {
+    if (performance.now() - workState.startedAt < budgetMs) return
+    await nextFrame()
+    workState.startedAt = performance.now()
+  }
+
+  function uniqueAssetPaths(placedObjectsData) {
+    const paths = new Set()
+    for (const placed of placedObjectsData || []) {
+      const path = getAssetById(placed.assetId)?.path
+      if (path) paths.add(path)
+    }
+    return [...paths]
+  }
+
+  async function prepareAssetModels(paths, concurrency = 2) {
+    let nextIndex = 0
+
+    async function worker() {
+      while (nextIndex < paths.length) {
+        const path = paths[nextIndex++]
+        await prepareAssetModel(path, tuneModelLighting, 'lighting').catch(() => {})
+        await nextFrame()
+      }
+    }
+
+    const workerCount = Math.min(concurrency, paths.length)
+    await Promise.all(Array.from({ length: workerCount }, worker))
+  }
+
+  async function loadPreparedAssetModel(asset) {
+    await prepareAssetModel(asset.path, tuneModelLighting, 'lighting')
+    return loadAssetModel(asset.path)
+  }
 
   let layers = [{ id: 'layer_0', name: 'Layer 1', visible: true }]
   let activeLayerId = 'layer_0'
@@ -235,6 +299,12 @@ function tuneModelLighting(model, assetPath = '') {
   let tileGrid = null
   let textureOverlayGroup = null
   let texturePlaneGroup = null
+  const terrainChunks = {
+    size: 32,
+    terrain: new Map(),
+    cliffs: new Map(),
+    overlays: new Map()
+  }
 
   let texturePlaneVertical = true
 
@@ -333,7 +403,7 @@ let brushRadius = 3.2
     if (!skipShadows)         _terrainDirtyOpts.skipShadows         = false
     if (!skipTextureOverlays) _terrainDirtyOpts.skipTextureOverlays = false
 
-    if (heightsOnly && region) {
+    if (region) {
       if (_terrainDirtyRegion) {
         _terrainDirtyRegion.x1 = Math.min(_terrainDirtyRegion.x1, region.x1)
         _terrainDirtyRegion.z1 = Math.min(_terrainDirtyRegion.z1, region.z1)
@@ -422,6 +492,7 @@ let brushRadius = 3.2
       <button id="toolPlace" class="tool-btn" title="Place Asset (3)">Place</button>
       <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
       <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
+      <button id="toolPathfinding" class="tool-btn" title="Pathfinding (6)">Path</button>
       <button id="layersToggleBtn" class="tool-btn" title="Toggle Layers panel">Layers</button>
       <button id="heightCullBtn" class="tool-btn" title="Hide objects above camera height (H)">Height Cull</button>
     </div>
@@ -561,6 +632,17 @@ let brushRadius = 3.2
       <input id="textureScale" type="range" min="1" max="8" step="1" value="1" />
       <label style="margin-top:5px;"><input id="toggleTexturePlaneV" type="checkbox" checked /> Vertical plane (V)</label>
     </div>
+
+    <div class="ctx-panel" id="ctx-pathfinding" style="display:none">
+      <div class="hint">Tile center: click to block · Shift to unblock<br>Near edge: click to toggle edge wall<br>Drag to paint tiles</div>
+      <div style="margin-top:8px;display:flex;gap:4px;">
+        <button id="pathMarkAllPassable" style="flex:1;font-size:11px;">All Passable</button>
+        <button id="pathMarkAllBlocked" style="flex:1;font-size:11px;">All Blocked</button>
+      </div>
+      <div style="margin-top:8px;border-top:1px solid #444;padding-top:8px;">
+        <button id="exportPathfindingBtn" style="width:100%;background:#1a4faf;color:#fff;border:none;border-radius:4px;padding:8px;cursor:pointer;font-size:12px;">Export Pathfinding</button>
+      </div>
+    </div>
   `
   uiRoot.appendChild(sidebar)
 
@@ -579,7 +661,7 @@ let brushRadius = 3.2
       <button id="closeKeybinds">✕</button>
     </div>
     <div>
-      <b>Tools:</b> 1 Terrain · 2 Paint · 3 Place · 4 Select · 5 Texture · 6 Texture Plane<br>
+      <b>Tools:</b> 1 Terrain · 2 Paint · 3 Place · 4 Select · 5 T.Plane · 6 Pathfinding<br>
       <b>History:</b> Ctrl+Z undo · Ctrl+Shift+Z / Ctrl+Y redo<br>
       <b>Transform:</b> G move · R rotate · S scale · X/Y/Z axis · click confirm · Esc cancel<br>
       <b>While moving:</b> Q raise · E lower · Shift snap to grid · Alt disable edge snap<br>
@@ -599,7 +681,8 @@ let brushRadius = 3.2
     [ToolMode.PAINT]: sidebar.querySelector('#toolPaint'),
     [ToolMode.PLACE]: sidebar.querySelector('#toolPlace'),
     [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
-    [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane')
+    [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane'),
+    [ToolMode.PATHFINDING]: sidebar.querySelector('#toolPathfinding')
   }
 
   toolButtons[ToolMode.TERRAIN]?.addEventListener('click', () => setTool(ToolMode.TERRAIN))
@@ -607,6 +690,7 @@ let brushRadius = 3.2
   toolButtons[ToolMode.PLACE]?.addEventListener('click', () => setTool(ToolMode.PLACE))
   toolButtons[ToolMode.SELECT]?.addEventListener('click', () => setTool(ToolMode.SELECT))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
+  toolButtons[ToolMode.PATHFINDING]?.addEventListener('click', () => setTool(ToolMode.PATHFINDING))
 
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
@@ -974,8 +1058,9 @@ let brushRadius = 3.2
       [ToolMode.PLACE]: 'ctx-place',
       [ToolMode.SELECT]: 'ctx-select',
       [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
+      [ToolMode.PATHFINDING]: 'ctx-pathfinding',
     }
-    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture']) {
+    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-pathfinding']) {
       const el = sidebar.querySelector(`#${id}`)
       if (el) el.style.display = 'none'
     }
@@ -1124,8 +1209,14 @@ let brushRadius = 3.2
   }
 
   function setTool(mode) {
+    const prev = state.tool
     state.tool = mode
     if (hoverEdgeHelper) { scene.remove(hoverEdgeHelper); hoverEdgeHelper = null }
+    if (mode === ToolMode.PATHFINDING) {
+      buildPathfindingOverlay()
+    } else if (prev === ToolMode.PATHFINDING) {
+      hidePathfindingOverlay()
+    }
     updateToolUI()
     updatePreviewObject().catch(console.error)
   }
@@ -1200,19 +1291,15 @@ let brushRadius = 3.2
     clearPlacedModels()
 
     // Pre-load all unique models in parallel so cache is warm before sequential cloning
-    const uniquePaths = [...new Set(
-      (placedObjectsData || [])
-        .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
-        .filter(Boolean)
-    )]
-    await Promise.all(uniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+    const uniquePaths = uniqueAssetPaths(placedObjectsData)
+    await prepareAssetModels(uniquePaths)
 
+    const workState = { startedAt: performance.now() }
     for (const placed of placedObjectsData || []) {
-      const asset = assetRegistry.find((a) => a.id === placed.assetId)
+      const asset = getAssetById(placed.assetId)
       if (!asset) continue
 
       const model = await loadAssetModel(asset.path)
-      tuneModelLighting(model, asset.path)
 
       model.position.set(placed.position.x, placed.position.y, placed.position.z)
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
@@ -1221,10 +1308,12 @@ let brushRadius = 3.2
       model.userData.type = 'asset'
       model.userData.layerId = placed.layerId || 'layer_0'
       if (placed.trigger) model.userData.trigger = { ...placed.trigger }
-      const layer = layers.find((l) => l.id === model.userData.layerId)
+      const layer = getLayerById(model.userData.layerId)
       model.visible = layer ? layer.visible : true
-      addPlacedModel(model)
+      addPlacedModel(model, { invalidateShadow: false })
+      await yieldIfOverBudget(workState)
     }
+    invalidateShadowCache()
   }
 
   function buildSaveData() {
@@ -1233,6 +1322,17 @@ let brushRadius = 3.2
       placedObjects: serializePlacedObjects(),
       layers: JSON.parse(JSON.stringify(layers)),
       activeLayerId
+    }
+  }
+
+  function buildPathfindingData() {
+    return {
+      width: map.width,
+      height: map.height,
+      worldOffset: { ...map.worldOffset },
+      passable: map.passable.map(row => [...row]),
+      blockedEdgesEW: map.blockedEdgesEW.map(row => [...row]),
+      blockedEdgesNS: map.blockedEdgesNS.map(row => [...row])
     }
   }
 
@@ -1325,19 +1425,50 @@ let brushRadius = 3.2
       }
     }
 
-    // Add placed objects shifted by offset
-    const _importPaths = [...new Set(
-      (data.placedObjects || [])
-        .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
-        .filter(Boolean)
-    )]
-    await Promise.all(_importPaths.map((path) => loadAssetModel(path).catch(() => {})))
+    // Merge pathfinding tiles and edge blockers with the same coordinate offset.
+    for (let z = 0; z < src.height; z++) {
+      for (let x = 0; x < src.width; x++) {
+        const dx = x + offsetX, dz = z + offsetZ
+        if (dx >= 0 && dx < map.width && dz >= 0 && dz < map.height) {
+          map.setTilePassable(dx, dz, src.isTilePassable(x, z))
+        }
+      }
+    }
+    for (let z = 0; z < src.height; z++) {
+      for (let x = 0; x <= src.width; x++) {
+        const dx = x + offsetX, dz = z + offsetZ
+        if (dx >= 0 && dx <= map.width && dz >= 0 && dz < map.height) {
+          map.setEdgeBlockedEW(dx, dz, src.isEdgeBlockedEW(x, z))
+        }
+      }
+    }
+    for (let z = 0; z <= src.height; z++) {
+      for (let x = 0; x < src.width; x++) {
+        const dx = x + offsetX, dz = z + offsetZ
+        if (dx >= 0 && dx < map.width && dz >= 0 && dz <= map.height) {
+          map.setEdgeBlockedNS(dx, dz, src.isEdgeBlockedNS(x, z))
+        }
+      }
+    }
 
+    // Add texture planes shifted by offset so imported chunks keep their visual masks.
+    for (const plane of src.texturePlanes || []) {
+      const clone = JSON.parse(JSON.stringify(plane))
+      clone.id = `plane_${Date.now()}_${Math.floor(Math.random() * 100000)}`
+      clone.position.x += offsetX
+      clone.position.z += offsetZ
+      map.texturePlanes.push(clone)
+    }
+
+    // Add placed objects shifted by offset
+    const _importPaths = uniqueAssetPaths(data.placedObjects)
+    await prepareAssetModels(_importPaths)
+
+    const workState = { startedAt: performance.now() }
     for (const placed of data.placedObjects || []) {
-      const asset = assetRegistry.find((a) => a.id === placed.assetId)
+      const asset = getAssetById(placed.assetId)
       if (!asset) continue
       const model = await loadAssetModel(asset.path)
-      tuneModelLighting(model, asset.path)
       model.position.set(placed.position.x + offsetX, placed.position.y, placed.position.z + offsetZ)
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
       model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
@@ -1345,12 +1476,14 @@ let brushRadius = 3.2
       model.userData.type = 'asset'
       model.userData.layerId = placed.layerId || activeLayerId
       if (placed.trigger) model.userData.trigger = { ...placed.trigger }
-      const _layer = layers.find((l) => l.id === model.userData.layerId)
+      const _layer = getLayerById(model.userData.layerId)
       model.visible = _layer ? _layer.visible : true
-      addPlacedModel(model)
+      addPlacedModel(model, { invalidateShadow: false })
+      await yieldIfOverBudget(workState)
     }
+    invalidateShadowCache()
 
-    markTerrainDirty()
+    markTerrainDirty({ region: { x1: offsetX, z1: offsetZ, x2: offsetX + src.width - 1, z2: offsetZ + src.height - 1 } })
     updateToolUI()
   }
 
@@ -1477,51 +1610,75 @@ let brushRadius = 3.2
     return lines
   }
 
-  function buildObjectShadowInfluences() {
+  function buildObjectShadowInfluences(region = null) {
     // Per-vertex darkening [0..1] driven by proximity to placed objects
     const rows = map.height + 1
     const cols = map.width + 1
-    const inf = []
-    for (let i = 0; i < rows; i++) inf.push(new Float32Array(cols).fill(1.0))
+    const regionX0 = Math.max(0, Math.floor(region?.x1 ?? 0))
+    const regionZ0 = Math.max(0, Math.floor(region?.z1 ?? 0))
+    const regionX1 = Math.min(cols - 1, Math.ceil(region?.x2 ?? (cols - 1)))
+    const regionZ1 = Math.min(rows - 1, Math.ceil(region?.z2 ?? (rows - 1)))
+    const isRegional = regionX0 > 0 || regionZ0 > 0 || regionX1 < cols - 1 || regionZ1 < rows - 1
+    const infRows = regionZ1 - regionZ0 + 1
+    const infCols = regionX1 - regionX0 + 1
+    const rowsData = []
+    for (let i = 0; i < infRows; i++) rowsData.push(new Float32Array(infCols).fill(1.0))
+    const inf = isRegional
+      ? { rows: rowsData, x0: regionX0, z0: regionZ0, regional: true }
+      : rowsData
 
-    // Force world matrices to be current before computing bounds
-    scene.updateMatrixWorld(true)
+    const setInfluence = (vx, vz, factor) => {
+      const row = isRegional ? rowsData[vz - regionZ0] : rowsData[vz]
+      const col = isRegional ? vx - regionX0 : vx
+      if (factor < row[col]) row[col] = factor
+    }
 
     const _box  = new THREE.Box3()
     const _size = new THREE.Vector3()
 
     for (const obj of placedGroup.children) {
-      _box.setFromObject(obj)
-      if (_box.isEmpty()) continue
-      _box.getSize(_size)
+      const bounds = obj.userData.bounds
+      if (bounds) {
+        _size.set(
+          bounds.width * Math.abs(obj.scale.x),
+          bounds.height * Math.abs(obj.scale.y),
+          bounds.depth * Math.abs(obj.scale.z)
+        )
+      } else {
+        _box.setFromObject(obj)
+        if (_box.isEmpty()) continue
+        _box.getSize(_size)
+      }
 
-      const asset = assetRegistry.find((a) => a.id === obj.userData.assetId)
-      const isModular = asset?.path?.toLowerCase().includes('modular assets') ?? false
-      const isTree = asset?.name?.toLowerCase().includes('tree') ?? false
+      const isModular = obj.userData._isModularAsset === true
+      const isTree = obj.userData._isTreeAsset === true
 
       const footprint = Math.max(_size.x, _size.z) * 0.5
       const shadowR   = footprint + (isTree || isModular ? 2.8 : 1.0)
       const maxDark   = isTree || isModular ? 0.82 : 0.42
+      const shadowRSq = shadowR * shadowR
+      const invShadowR = 1 / shadowR
 
       const cx = obj.position.x
       const cz = obj.position.z
 
-      const x0 = Math.max(0,        Math.floor(cx - shadowR))
-      const x1 = Math.min(cols - 1, Math.ceil (cx + shadowR))
-      const z0 = Math.max(0,        Math.floor(cz - shadowR))
-      const z1 = Math.min(rows - 1, Math.ceil (cz + shadowR))
+      const x0 = Math.max(regionX0, Math.floor(cx - shadowR))
+      const x1 = Math.min(regionX1, Math.ceil (cx + shadowR))
+      const z0 = Math.max(regionZ0, Math.floor(cz - shadowR))
+      const z1 = Math.min(regionZ1, Math.ceil (cz + shadowR))
+      if (x0 > x1 || z0 > z1) continue
 
       for (let vz = z0; vz <= z1; vz++) {
         for (let vx = x0; vx <= x1; vx++) {
           const dx   = vx - cx
           const dz   = vz - cz
-          const dist = Math.sqrt(dx * dx + dz * dz)
-          if (dist >= shadowR) continue
+          const distSq = dx * dx + dz * dz
+          if (distSq >= shadowRSq) continue
 
-          const t      = 1.0 - dist / shadowR
+          const t      = 1.0 - Math.sqrt(distSq) * invShadowR
           const dark   = t * t * maxDark
           const factor = 1.0 - dark
-          if (factor < inf[vz][vx]) inf[vz][vx] = factor
+          setInfluence(vx, vz, factor)
         }
       }
     }
@@ -1538,52 +1695,360 @@ let brushRadius = 3.2
         else obj.material?.dispose()
       }
     })
-    scene.remove(group)
+    if (group.parent) group.parent.remove(group)
+    else scene.remove(group)
+  }
+
+  function terrainChunkKey(cx, cz) {
+    return `${cx},${cz}`
+  }
+
+  function terrainChunkBounds(cx, cz) {
+    const x1 = cx * terrainChunks.size
+    const z1 = cz * terrainChunks.size
+    return {
+      x1,
+      z1,
+      x2: Math.min(map.width - 1, x1 + terrainChunks.size - 1),
+      z2: Math.min(map.height - 1, z1 + terrainChunks.size - 1)
+    }
+  }
+
+  function terrainChunksForRegion(region) {
+    const x1 = Math.max(0, Math.floor(region.x1) - 1)
+    const z1 = Math.max(0, Math.floor(region.z1) - 1)
+    const x2 = Math.min(map.width - 1, Math.floor(region.x2) + 1)
+    const z2 = Math.min(map.height - 1, Math.floor(region.z2) + 1)
+    const cx1 = Math.floor(x1 / terrainChunks.size)
+    const cz1 = Math.floor(z1 / terrainChunks.size)
+    const cx2 = Math.floor(x2 / terrainChunks.size)
+    const cz2 = Math.floor(z2 / terrainChunks.size)
+    const chunks = []
+    for (let cz = cz1; cz <= cz2; cz++) {
+      for (let cx = cx1; cx <= cx2; cx++) chunks.push({ cx, cz })
+    }
+    return chunks
+  }
+
+  function terrainRegionForChunks(chunks) {
+    let x1 = map.width - 1
+    let z1 = map.height - 1
+    let x2 = 0
+    let z2 = 0
+    for (const { cx, cz } of chunks) {
+      const b = terrainChunkBounds(cx, cz)
+      x1 = Math.min(x1, b.x1)
+      z1 = Math.min(z1, b.z1)
+      x2 = Math.max(x2, b.x2 + 1)
+      z2 = Math.max(z2, b.z2 + 1)
+    }
+    return { x1, z1, x2, z2 }
+  }
+
+  function disposeChunkMapEntry(chunkMap, key) {
+    const group = chunkMap.get(key)
+    if (!group) return
+    disposeGroup(group)
+    chunkMap.delete(key)
+  }
+
+  function rebuildTerrainChunk(cx, cz, shadowInf, { skipTextureOverlays = false } = {}) {
+    const key = terrainChunkKey(cx, cz)
+    const bounds = terrainChunkBounds(cx, cz)
+
+    disposeChunkMapEntry(terrainChunks.terrain, key)
+    disposeChunkMapEntry(terrainChunks.cliffs, key)
+    if (!skipTextureOverlays) disposeChunkMapEntry(terrainChunks.overlays, key)
+
+    const terrain = buildTerrainMeshes(map, waterTexture, shadowInf, bounds)
+    terrain.name = `terrain-chunk-${key}`
+    terrainChunks.terrain.set(key, terrain)
+    terrainGroup.add(terrain)
+
+    const cliff = buildCliffMeshes(map, bounds)
+    cliff.name = `cliff-chunk-${key}`
+    terrainChunks.cliffs.set(key, cliff)
+    cliffs.add(cliff)
+
+    if (!skipTextureOverlays) {
+      const overlay = buildTextureOverlays(map, textureById, textureCache, bounds)
+      overlay.name = `texture-overlay-chunk-${key}`
+      terrainChunks.overlays.set(key, overlay)
+      textureOverlayGroup.add(overlay)
+    }
+  }
+
+  function rebuildAllTerrainChunks(shadowInf, { skipTextureOverlays = false } = {}) {
+    terrainChunks.terrain.clear()
+    terrainChunks.cliffs.clear()
+    terrainChunks.overlays.clear()
+    const chunkCols = Math.ceil(map.width / terrainChunks.size)
+    const chunkRows = Math.ceil(map.height / terrainChunks.size)
+    for (let cz = 0; cz < chunkRows; cz++) {
+      for (let cx = 0; cx < chunkCols; cx++) {
+        rebuildTerrainChunk(cx, cz, shadowInf, { skipTextureOverlays })
+      }
+    }
+  }
+
+  let pathfindingOverlayMesh = null
+  let pathfindingEdgeMesh = null
+  let pathfindingEdgeHighlightMesh = null
+
+  // Returns {type:'EW',x,z} or {type:'NS',x,z} when cursor is near a tile edge, null otherwise
+  function pickEdgeFromTile(tile) {
+    if (!tile) return null
+    const THRESHOLD = 0.3
+    const distEW = Math.min(tile.u, 1 - tile.u)
+    const distNS = Math.min(tile.v, 1 - tile.v)
+    if (distEW > THRESHOLD && distNS > THRESHOLD) return null
+    if (distEW < distNS) {
+      return { type: 'EW', x: tile.u < 0.5 ? tile.x : tile.x + 1, z: tile.z }
+    } else {
+      return { type: 'NS', x: tile.x, z: tile.v < 0.5 ? tile.z : tile.z + 1 }
+    }
+  }
+
+  function buildPathfindingTileOverlay() {
+    if (pathfindingOverlayMesh) {
+      scene.remove(pathfindingOverlayMesh)
+      pathfindingOverlayMesh.geometry.dispose()
+      pathfindingOverlayMesh.material.dispose()
+      pathfindingOverlayMesh = null
+    }
+
+    const positions = []
+    const colors = []
+    const indices = []
+    let idx = 0
+
+    for (let z = 0; z < map.height; z++) {
+      for (let x = 0; x < map.width; x++) {
+        const passable = map.isTilePassable(x, z)
+        const r = passable ? 0 : 0.9
+        const g = passable ? 0.85 : 0
+
+        const corners = map.getTileCornerHeights(x, z)
+        const off = 0.06
+
+        positions.push(
+          x,     corners.tl + off, z,
+          x + 1, corners.tr + off, z,
+          x,     corners.bl + off, z + 1,
+          x + 1, corners.br + off, z + 1
+        )
+        colors.push(r, g, 0, r, g, 0, r, g, 0, r, g, 0)
+        indices.push(idx, idx + 2, idx + 1, idx + 1, idx + 2, idx + 3)
+        idx += 4
+      }
+    }
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+    geo.setIndex(indices)
+
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.42,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+
+    pathfindingOverlayMesh = new THREE.Mesh(geo, mat)
+    pathfindingOverlayMesh.renderOrder = 2
+    scene.add(pathfindingOverlayMesh)
+  }
+
+  function buildPathfindingEdgeOverlay() {
+    if (pathfindingEdgeMesh) {
+      scene.remove(pathfindingEdgeMesh)
+      pathfindingEdgeMesh.geometry.dispose()
+      pathfindingEdgeMesh.material.dispose()
+      pathfindingEdgeMesh = null
+    }
+
+    const positions = []
+    const indices = []
+    let idx = 0
+    const H = 0.5
+    const OFF = 0.05
+
+    // EW blocked edges: wall at world X=x, spanning z row z to z+1
+    for (let z = 0; z < map.height; z++) {
+      for (let x = 0; x <= map.width; x++) {
+        if (!map.isEdgeBlockedEW(x, z)) continue
+        const y0 = map.getVertexHeight(x, z) + OFF
+        const y1 = map.getVertexHeight(x, z + 1) + OFF
+        positions.push(
+          x, y0,     z,
+          x, y0 + H, z,
+          x, y1 + H, z + 1,
+          x, y1,     z + 1
+        )
+        indices.push(idx, idx+1, idx+2, idx, idx+2, idx+3)
+        idx += 4
+      }
+    }
+
+    // NS blocked edges: wall at world Z=z, spanning x column x to x+1
+    for (let z = 0; z <= map.height; z++) {
+      for (let x = 0; x < map.width; x++) {
+        if (!map.isEdgeBlockedNS(x, z)) continue
+        const y0 = map.getVertexHeight(x, z) + OFF
+        const y1 = map.getVertexHeight(x + 1, z) + OFF
+        positions.push(
+          x,     y0,     z,
+          x,     y0 + H, z,
+          x + 1, y1 + H, z,
+          x + 1, y1,     z
+        )
+        indices.push(idx, idx+1, idx+2, idx, idx+2, idx+3)
+        idx += 4
+      }
+    }
+
+    if (indices.length === 0) return
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geo.setIndex(indices)
+
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff3300,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+
+    pathfindingEdgeMesh = new THREE.Mesh(geo, mat)
+    pathfindingEdgeMesh.renderOrder = 3
+    scene.add(pathfindingEdgeMesh)
+  }
+
+  function updatePathfindingEdgeHighlight(edge) {
+    if (pathfindingEdgeHighlightMesh) {
+      scene.remove(pathfindingEdgeHighlightMesh)
+      pathfindingEdgeHighlightMesh.geometry.dispose()
+      pathfindingEdgeHighlightMesh.material.dispose()
+      pathfindingEdgeHighlightMesh = null
+    }
+    if (!edge) return
+
+    const H = 0.5
+    const OFF = 0.07
+    const positions = []
+
+    if (edge.type === 'EW') {
+      const y0 = map.getVertexHeight(edge.x, edge.z) + OFF
+      const y1 = map.getVertexHeight(edge.x, edge.z + 1) + OFF
+      positions.push(
+        edge.x, y0,     edge.z,
+        edge.x, y0 + H, edge.z,
+        edge.x, y1 + H, edge.z + 1,
+        edge.x, y1,     edge.z + 1
+      )
+    } else {
+      const y0 = map.getVertexHeight(edge.x, edge.z) + OFF
+      const y1 = map.getVertexHeight(edge.x + 1, edge.z) + OFF
+      positions.push(
+        edge.x,     y0,     edge.z,
+        edge.x,     y0 + H, edge.z,
+        edge.x + 1, y1 + H, edge.z,
+        edge.x + 1, y1,     edge.z
+      )
+    }
+
+    const blocked = edge.type === 'EW'
+      ? map.isEdgeBlockedEW(edge.x, edge.z)
+      : map.isEdgeBlockedNS(edge.x, edge.z)
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geo.setIndex([0, 1, 2, 0, 2, 3])
+
+    const mat = new THREE.MeshBasicMaterial({
+      color: blocked ? 0x00ff88 : 0xffff00,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+
+    pathfindingEdgeHighlightMesh = new THREE.Mesh(geo, mat)
+    pathfindingEdgeHighlightMesh.renderOrder = 4
+    scene.add(pathfindingEdgeHighlightMesh)
+  }
+
+  function buildPathfindingOverlay() {
+    buildPathfindingTileOverlay()
+    buildPathfindingEdgeOverlay()
+  }
+
+  function hidePathfindingOverlay() {
+    if (pathfindingOverlayMesh) {
+      scene.remove(pathfindingOverlayMesh)
+      pathfindingOverlayMesh.geometry.dispose()
+      pathfindingOverlayMesh.material.dispose()
+      pathfindingOverlayMesh = null
+    }
+    if (pathfindingEdgeMesh) {
+      scene.remove(pathfindingEdgeMesh)
+      pathfindingEdgeMesh.geometry.dispose()
+      pathfindingEdgeMesh.material.dispose()
+      pathfindingEdgeMesh = null
+    }
+    updatePathfindingEdgeHighlight(null)
+    highlight.visible = true
   }
 
   function rebuildTerrain({ skipTexturePlanes = false, skipShadows = false, skipTextureOverlays = false, _heightsOnlyRegion = null } = {}) {
-    // Fast path: only heights changed in a known tile region — update land mesh in-place.
-    if (_heightsOnlyRegion) {
-      const shadowInf = _shadowInfluencesCache ?? buildObjectShadowInfluences()
-      _shadowInfluencesCache = shadowInf
-      if (updateTerrainLandHeights(map, shadowInf, _heightsOnlyRegion.x1, _heightsOnlyRegion.z1, _heightsOnlyRegion.x2, _heightsOnlyRegion.z2)) {
-        disposeGroup(cliffs)
-        cliffs = buildCliffMeshes(map)
-        scene.add(cliffs)
-        // Rebuild water meshes in-place so water appears immediately during sculpting
-        if (terrainGroup) {
-          for (const child of [...terrainGroup.children]) {
-            if (child.name === 'terrain-water' || child.name === 'terrain-surface-water') {
-              child.geometry?.dispose()
-              child.material?.dispose()
-              terrainGroup.remove(child)
-            }
-          }
-          const wg = buildWaterMeshes(map, waterTexture)
-          for (const child of [...wg.children]) terrainGroup.add(child)
-        }
-        if (state.showSplitLines) {
-          if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
-          splitLines = buildSplitLines()
-          scene.add(splitLines)
-        }
-        if (state.showTileGrid) {
-          if (tileGrid) { tileGrid.geometry?.dispose(); tileGrid.material?.dispose(); scene.remove(tileGrid) }
-          tileGrid = buildTileGrid()
-          scene.add(tileGrid)
-        }
-        applyLayerVisibility()
-        return
+    if (_heightsOnlyRegion && terrainGroup && cliffs) {
+      const chunks = terrainChunksForRegion(_heightsOnlyRegion)
+      const shadowRegion = terrainRegionForChunks(chunks)
+      const shadowInf = skipShadows
+        ? (_shadowInfluencesCache ?? buildObjectShadowInfluences(shadowRegion))
+        : buildObjectShadowInfluences(shadowRegion)
+      if (!skipTextureOverlays && !textureOverlayGroup) {
+        textureOverlayGroup = new THREE.Group()
+        textureOverlayGroup.name = 'texture-overlay-chunks'
+        scene.add(textureOverlayGroup)
       }
-      // Partial update not available (e.g. map size changed) — fall through to full rebuild.
+      for (const { cx, cz } of chunks) {
+        rebuildTerrainChunk(cx, cz, shadowInf, { skipTextureOverlays })
+      }
+      if (!skipTexturePlanes) {
+        if (texturePlaneGroup) disposeGroup(texturePlaneGroup)
+        texturePlaneGroup = buildTexturePlanes(map, textureById, textureCache)
+        scene.add(texturePlaneGroup)
+      }
+      if (state.showSplitLines) {
+        if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
+        splitLines = buildSplitLines()
+        scene.add(splitLines)
+      }
+      if (state.showTileGrid) {
+        if (tileGrid) { tileGrid.geometry?.dispose(); tileGrid.material?.dispose(); scene.remove(tileGrid) }
+        tileGrid = buildTileGrid()
+        scene.add(tileGrid)
+      }
+      applyLayerVisibility()
+      return
     }
 
     disposeGroup(terrainGroup)
     disposeGroup(cliffs)
     if (splitLines) { splitLines.geometry?.dispose(); splitLines.material?.dispose(); scene.remove(splitLines) }
     if (tileGrid)   { tileGrid.geometry?.dispose();   tileGrid.material?.dispose();   scene.remove(tileGrid) }
-    if (!skipTextureOverlays && textureOverlayGroup) scene.remove(textureOverlayGroup)
-    if (!skipTexturePlanes && texturePlaneGroup) scene.remove(texturePlaneGroup)
+    splitLines = null
+    tileGrid = null
+    if (!skipTextureOverlays && textureOverlayGroup) disposeGroup(textureOverlayGroup)
+    if (!skipTexturePlanes && texturePlaneGroup) disposeGroup(texturePlaneGroup)
+    terrainChunks.terrain.clear()
+    terrainChunks.cliffs.clear()
+    if (!skipTextureOverlays) terrainChunks.overlays.clear()
 
     map.selectedTexturePlaneId = selectedTexturePlane ? selectedTexturePlane.id : null
 
@@ -1591,20 +2056,27 @@ let brushRadius = 3.2
     const shadowInf = _shadowInfluencesCache ?? buildObjectShadowInfluences()
     _shadowInfluencesCache = shadowInf
 
-    terrainGroup = buildTerrainMeshes(map, waterTexture, shadowInf)
-    cliffs = buildCliffMeshes(map)
-    splitLines = buildSplitLines()
-    tileGrid = buildTileGrid()
-    if (!skipTextureOverlays) textureOverlayGroup = buildTextureOverlays(map, textureRegistry, textureCache)
-
+    terrainGroup = new THREE.Group()
+    terrainGroup.name = 'terrain-chunks'
+    cliffs = new THREE.Group()
+    cliffs.name = 'cliff-chunks'
+    if (!skipTextureOverlays) {
+      textureOverlayGroup = new THREE.Group()
+      textureOverlayGroup.name = 'texture-overlay-chunks'
+    }
     scene.add(terrainGroup)
     scene.add(cliffs)
-    scene.add(splitLines)
-    scene.add(tileGrid)
-    if (textureOverlayGroup) scene.add(textureOverlayGroup)
+    if (!skipTextureOverlays && textureOverlayGroup) scene.add(textureOverlayGroup)
+    rebuildAllTerrainChunks(shadowInf, { skipTextureOverlays })
+
+    if (state.showSplitLines) splitLines = buildSplitLines()
+    if (state.showTileGrid) tileGrid = buildTileGrid()
+
+    if (splitLines) scene.add(splitLines)
+    if (tileGrid) scene.add(tileGrid)
 
     if (!skipTexturePlanes) {
-      texturePlaneGroup = buildTexturePlanes(map, textureRegistry, textureCache)
+      texturePlaneGroup = buildTexturePlanes(map, textureById, textureCache)
       scene.add(texturePlaneGroup)
     } else if (texturePlaneGroup) {
       scene.add(texturePlaneGroup)
@@ -1746,6 +2218,32 @@ let brushRadius = 3.2
     }
   }
 
+  // copy pathfinding data
+  for (let z = 0; z < imported.height; z++) {
+    for (let x = 0; x < imported.width; x++) {
+      const dstX = x + offsetX
+      const dstZ = z + offsetZ
+      if (dstX < 0 || dstZ < 0 || dstX >= map.width || dstZ >= map.height) continue
+      map.setTilePassable(dstX, dstZ, imported.isTilePassable(x, z))
+    }
+  }
+  for (let z = 0; z < imported.height; z++) {
+    for (let x = 0; x <= imported.width; x++) {
+      const dstX = x + offsetX
+      const dstZ = z + offsetZ
+      if (dstX < 0 || dstZ < 0 || dstX > map.width || dstZ >= map.height) continue
+      map.setEdgeBlockedEW(dstX, dstZ, imported.isEdgeBlockedEW(x, z))
+    }
+  }
+  for (let z = 0; z <= imported.height; z++) {
+    for (let x = 0; x < imported.width; x++) {
+      const dstX = x + offsetX
+      const dstZ = z + offsetZ
+      if (dstX < 0 || dstZ < 0 || dstX >= map.width || dstZ > map.height) continue
+      map.setEdgeBlockedNS(dstX, dstZ, imported.isEdgeBlockedNS(x, z))
+    }
+  }
+
   // import texture planes
   for (const plane of imported.texturePlanes || []) {
     const clone = JSON.parse(JSON.stringify(plane))
@@ -1756,19 +2254,15 @@ let brushRadius = 3.2
   }
 
   // import placed objects — pre-load unique models in parallel first
-  const _mergeUniquePaths = [...new Set(
-    (data.placedObjects || [])
-      .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
-      .filter(Boolean)
-  )]
-  await Promise.all(_mergeUniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+  const _mergeUniquePaths = uniqueAssetPaths(data.placedObjects)
+  await prepareAssetModels(_mergeUniquePaths)
 
+  const workState = { startedAt: performance.now() }
   for (const placed of data.placedObjects || []) {
-    const asset = assetRegistry.find((a) => a.id === placed.assetId)
+    const asset = getAssetById(placed.assetId)
     if (!asset) continue
 
     const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model, asset.path)
 
     model.position.set(
       placed.position.x + offsetX,
@@ -1780,12 +2274,15 @@ let brushRadius = 3.2
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
     model.userData.layerId = placed.layerId || activeLayerId
-    const _importLayer = layers.find((l) => l.id === model.userData.layerId)
+    if (placed.trigger) model.userData.trigger = { ...placed.trigger }
+    const _importLayer = getLayerById(model.userData.layerId)
     model.visible = _importLayer ? _importLayer.visible : true
-    addPlacedModel(model)
+    addPlacedModel(model, { invalidateShadow: false })
+    await yieldIfOverBudget(workState)
   }
+  invalidateShadowCache()
 
-  markTerrainDirty()
+  markTerrainDirty({ region: { x1: offsetX, z1: offsetZ, x2: offsetX + imported.width - 1, z2: offsetZ + imported.height - 1 } })
   updateSelectionHelper()
   updateToolUI()
 }
@@ -2314,6 +2811,12 @@ function applyToolAtTile(tile, eventLike = null) {
     return
   }
 
+  if (state.tool === ToolMode.PATHFINDING) {
+    map.setTilePassable(tile.x, tile.z, !!eventLike?.shiftKey)
+    buildPathfindingTileOverlay()
+    return
+  }
+
 }
 
   // Returns the nearest tile-edge center {x, z} for wall placement based on cursor u/v
@@ -2385,8 +2888,7 @@ function applyToolAtTile(tile, eventLike = null) {
     const asset = assetRegistry.find((a) => a.id === selectedAssetId)
     if (!asset) return
 
-    const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model, asset.path)
+    const model = await loadPreparedAssetModel(asset)
 
     if (isStoneModularAsset(asset)) {
       model.scale.y = 1
@@ -2411,8 +2913,7 @@ function applyToolAtTile(tile, eventLike = null) {
     const asset = assetRegistry.find((a) => a.id === selectedAssetId)
     if (!asset) return
 
-    const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model, asset.path)
+    const model = await loadPreparedAssetModel(asset)
 
     if (isStoneModularAsset(asset)) {
       model.scale.y = 1
@@ -2466,8 +2967,7 @@ function applyToolAtTile(tile, eventLike = null) {
     pushUndoState()
     const replacements = []
     for (const obj of [...selectedPlacedObjects]) {
-      const model = await loadAssetModel(newAsset.path)
-      tuneModelLighting(model, newAsset.path)
+      const model = await loadPreparedAssetModel(newAsset)
       model.position.copy(obj.position)
       model.rotation.copy(obj.rotation)
       model.scale.copy(obj.scale)
@@ -2570,8 +3070,7 @@ function applyToolAtTile(tile, eventLike = null) {
         const asset = assetRegistry.find((a) => a.id === src.userData.assetId)
         if (!asset) continue
 
-        const model = await loadAssetModel(asset.path)
-        tuneModelLighting(model, asset.path)
+        const model = await loadPreparedAssetModel(asset)
         model.rotation.copy(src.rotation)
         model.scale.copy(src.scale)
         model.userData.assetId = asset.id
@@ -2608,8 +3107,7 @@ function applyToolAtTile(tile, eventLike = null) {
       const asset = assetRegistry.find((a) => a.id === selectedPlacedObject.userData.assetId)
       if (!asset) return
 
-      const model = await loadAssetModel(asset.path)
-      tuneModelLighting(model, asset.path)
+      const model = await loadPreparedAssetModel(asset)
 
       const targetFootprint = getObjectFootprint(selectedPlacedObject)
 
@@ -2815,7 +3313,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
     let model
     try {
-      model = await loadAssetModel(asset.path)
+      model = await loadPreparedAssetModel(asset)
     } catch {
       return null
     }
@@ -3244,6 +3742,24 @@ function applyToolAtTile(tile, eventLike = null) {
     }
   })
 
+  sidebar.querySelector('#exportPathfindingBtn')?.addEventListener('click', () => {
+    downloadJSON('pathfinding.json', buildPathfindingData())
+  })
+
+  sidebar.querySelector('#pathMarkAllPassable')?.addEventListener('click', () => {
+    for (let z = 0; z < map.height; z++)
+      for (let x = 0; x < map.width; x++)
+        map.setTilePassable(x, z, true)
+    if (state.tool === ToolMode.PATHFINDING) buildPathfindingOverlay()
+  })
+
+  sidebar.querySelector('#pathMarkAllBlocked')?.addEventListener('click', () => {
+    for (let z = 0; z < map.height; z++)
+      for (let x = 0; x < map.width; x++)
+        map.setTilePassable(x, z, false)
+    if (state.tool === ToolMode.PATHFINDING) buildPathfindingOverlay()
+  })
+
   const restoreAutoSaveBtn = topBar.querySelector('#restoreAutoSaveBtn')
   restoreAutoSaveBtn.addEventListener('click', async () => {
     const raw = localStorage.getItem('projectrs-autosave')
@@ -3356,12 +3872,22 @@ function applyToolAtTile(tile, eventLike = null) {
 
   sidebar.querySelector('#toggleSplitLines').addEventListener('change', (e) => {
     state.showSplitLines = e.target.checked
-    if (splitLines) splitLines.visible = state.showSplitLines
+    if (state.showSplitLines && !splitLines) {
+      splitLines = buildSplitLines()
+      scene.add(splitLines)
+    } else if (splitLines) {
+      splitLines.visible = state.showSplitLines
+    }
   })
 
   sidebar.querySelector('#toggleTileGrid').addEventListener('change', (e) => {
     state.showTileGrid = e.target.checked
-    if (tileGrid) tileGrid.visible = state.showTileGrid
+    if (state.showTileGrid && !tileGrid) {
+      tileGrid = buildTileGrid()
+      scene.add(tileGrid)
+    } else if (tileGrid) {
+      tileGrid.visible = state.showTileGrid
+    }
   })
 
   sidebar.querySelector('#toggleHalfPaint').addEventListener('change', (e) => {
@@ -3444,6 +3970,12 @@ function applyToolAtTile(tile, eventLike = null) {
     const y = map.getAverageTileHeight(tile.x, tile.z) + 0.04
     highlight.position.set(tile.x + 0.5, y, tile.z + 0.5)
     hoverText.textContent = `tile (${tile.x}, ${tile.z})  elev ${y.toFixed(2)}`
+
+    if (state.tool === ToolMode.PATHFINDING) {
+      const edge = pickEdgeFromTile(tile)
+      updatePathfindingEdgeHighlight(edge)
+      highlight.visible = !edge
+    }
 
     if (previewObject) {
       const sp = pickSurfacePoint(event)
@@ -3592,7 +4124,8 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
   if (
     state.tool === ToolMode.TERRAIN ||
-    state.tool === ToolMode.PAINT
+    state.tool === ToolMode.PAINT ||
+    state.tool === ToolMode.PATHFINDING
   ) {
     if (state.tool === ToolMode.TERRAIN) {
       const now = performance.now()
@@ -3732,6 +4265,20 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (state.tool === ToolMode.PLACE) {
       await placeSelectedAsset(tile, event)
       return
+    }
+
+    if (state.tool === ToolMode.PATHFINDING) {
+      const edge = pickEdgeFromTile(tile)
+      if (edge) {
+        const cur = edge.type === 'EW'
+          ? map.isEdgeBlockedEW(edge.x, edge.z)
+          : map.isEdgeBlockedNS(edge.x, edge.z)
+        if (edge.type === 'EW') map.setEdgeBlockedEW(edge.x, edge.z, !cur)
+        else map.setEdgeBlockedNS(edge.x, edge.z, !cur)
+        buildPathfindingEdgeOverlay()
+        updatePathfindingEdgeHighlight(edge)
+        return
+      }
     }
 
     state.isPainting = true
@@ -4107,6 +4654,7 @@ if (key === 'e') {
     if (key === '3') return setTool(ToolMode.PLACE)
     if (key === '4') return setTool(ToolMode.SELECT)
     if (key === '5') return setTool(ToolMode.TEXTURE_PLANE)
+    if (key === '6') return setTool(ToolMode.PATHFINDING)
 
     if (key === 'v') {
       texturePlaneVertical = !texturePlaneVertical
@@ -4222,6 +4770,7 @@ if (key === 'e') {
   async function initAssets() {
     try {
       assetRegistry = await loadAssetRegistry()
+      assetById = new Map(assetRegistry.map((asset) => [asset.id, asset]))
 
       // Default to Props tab
       assetSectionFilter = 'Models'
@@ -4256,6 +4805,7 @@ if (key === 'e') {
   async function initTextures() {
     try {
       textureRegistry = await loadTextureRegistry()
+      textureById = new Map(textureRegistry.map((tex) => [tex.id, tex]))
       filteredTextures = [...textureRegistry].sort((a, b) => a.name.localeCompare(b.name))
 
       for (const tex of textureRegistry) {

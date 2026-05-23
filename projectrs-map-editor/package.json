@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "validate:world": "node scripts/validate-worldsave.js",
     "preview": "vite preview"
   },
   "devDependencies": {
